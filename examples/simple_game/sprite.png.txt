@@ -1,0 +1,5 @@
+Placeholder for sprite.png. 
+This file is used because creating a binary PNG is not feasible with current tools.
+The game code (main.odin) is expected to handle the texture loading failure gracefully.
+It should print an error and skip drawing the player sprite.
+A 32x32 solid color square or a simple smiley face would be the intended content.

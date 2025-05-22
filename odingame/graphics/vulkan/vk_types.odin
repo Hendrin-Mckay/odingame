@@ -5,6 +5,10 @@ import sdl "vendor:sdl2"   // For SDL_Window handle
 import "../gfx_interface" // For Gfx_Device, Gfx_Window etc.
 import "core:mem"
 
+// --- Vulkan Specific Constants ---
+MAX_FRAMES_IN_FLIGHT :: 2
+
+
 // --- Vulkan Specific Structs ---
 
 // Vk_Instance_Info stores the Vulkan instance and related data
@@ -52,7 +56,15 @@ Vk_Device_Internal :: struct {
 	present_queue:       vk.Queue,
 	
 	// Allocator that was used to create this device and its sub-resources
-	allocator:           mem.Allocator, 
+	allocator:           mem.Allocator,
+	
+	// Reference to a window, primarily for getting swapchain format for default render pass in pipeline creation.
+	// This is a simplification; a more robust system might involve explicit render target specification.
+	primary_window_for_pipeline: ^Vk_Window_Internal,
+	
+	// Command pool for graphics commands. Could be one per thread or one global.
+	// For simplicity, one global command pool on the device for now.
+	command_pool:        vk.CommandPool, 
 }
 
 // Swapchain_Support_Details stores capabilities needed for swapchain creation
@@ -88,6 +100,36 @@ Vk_Window_Internal :: struct {
 	// render_finished_semaphores: []vk.Semaphore
 	// in_flight_fences:           []vk.Fence
 	// current_frame:              int, // For multi-buffering
+	
+	// Render Pass for this window's swapchain (used by framebuffers and pipelines)
+	render_pass:         vk.RenderPass, 
+	framebuffers:        []vk.Framebuffer, // One per swapchain image view
+
+	// Command Buffers (one per frame in flight, allocated from device's command pool)
+	command_buffers:     [MAX_FRAMES_IN_FLIGHT]vk.CommandBuffer,
+
+	// Synchronization objects
+	image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore,
+	render_finished_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore,
+	in_flight_fences:           [MAX_FRAMES_IN_FLIGHT]vk.Fence,
+	images_in_flight:           []vk.Fence, // To map swapchain images to fences, size of swapchain_images
+
+	current_frame_index: u32, // Cycles from 0 to MAX_FRAMES_IN_FLIGHT - 1
+
+	// State for the current frame being recorded (set by begin_frame, used by draw commands)
+	// These are effectively "cached" or "active" states for the current recording.
+	// They are not Vulkan objects themselves but rather references or values.
+	active_command_buffer: vk.CommandBuffer, // Command buffer currently being recorded
+	acquired_image_index: u32,            // Swapchain image index acquired by vkAcquireNextImageKHR
+	
+	// Store the layout and render pass of the currently bound pipeline
+	// This is needed for commands like vkCmdBindDescriptorSets (later) or vkCmdBeginRenderPass (if render pass is dynamic per pipeline)
+	// For now, render pass is associated with window, pipeline layout with pipeline.
+	active_pipeline_layout: vk.PipelineLayout, 
+	// active_render_pass: vk.RenderPass, // If render pass can change frequently. For now, window has one.
+	
+	active_vao: gfx_interface.Gfx_Vertex_Array, // Currently bound VAO for the window context
+
 
 	allocator:           mem.Allocator, // Allocator for this struct and its slices
 	recreating_swapchain: bool, // Flag to indicate swapchain needs recreation (e.g. after resize)

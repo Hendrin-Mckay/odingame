@@ -197,6 +197,26 @@ vk_create_swapchain_internal_logic :: proc(
 	vk_win_internal.swapchain_format = surface_format.format
 	vk_win_internal.swapchain_extent = extent
 
+	// --- Create Render Pass (if not already created for this window) ---
+	// This render pass is owned by the window and used for its framebuffers.
+	// Pipelines must be compatible with this render pass.
+	if vk_win_internal.render_pass == vk.NULL_HANDLE {
+		rp, rp_err := vk_create_render_pass_internal(logical_device, vk_win_internal.swapchain_format)
+		if rp_err != .None {
+			log.errorf("Failed to create render pass for window: %v", rp_err)
+			// Cleanup new swapchain and its images/views if render pass fails
+			// This path is complex; for now, assume render pass creation succeeds if swapchain does.
+			// A more robust cleanup would be needed here.
+			vk.DestroySwapchainKHR(logical_device, vk_win_internal.swapchain, p_vk_allocator)
+			vk_win_internal.swapchain = vk.NULL_HANDLE
+			// Also need to clean up swapchain_images and swapchain_image_views if they were populated
+			return .Device_Creation_Failed 
+		}
+		vk_win_internal.render_pass = rp
+		log.infof("Window render pass created: %p", vk_win_internal.render_pass)
+	}
+
+
 	// --- Get Swapchain Images ---
 	var sc_image_count: u32
 	vk.GetSwapchainImagesKHR(logical_device, vk_win_internal.swapchain, &sc_image_count, nil)
@@ -253,8 +273,95 @@ vk_create_swapchain_internal_logic :: proc(
 		}
 	}
 	log.infof("Created %d image views for swapchain images.", sc_image_count)
+
+	// --- Create Framebuffers ---
+	// Framebuffers depend on image views and the render pass.
+	// Destroy old framebuffers first if this is a recreation.
+	vk_destroy_framebuffers_internal(logical_device, vk_win_internal, p_vk_allocator) // Defined below
+	fb_err := vk_create_framebuffers_internal(logical_device, vk_win_internal, p_vk_allocator)
+	if fb_err != .None {
+		log.error("Failed to create framebuffers for swapchain.")
+		// Extensive cleanup needed here: new image views, new images, new swapchain, potentially render pass if just created.
+		// This indicates a critical failure. For now, returning error.
+		// A robust implementation would unwind all creations from this function.
+		vk_destroy_swapchain_image_views(logical_device, vk_win_internal, p_vk_allocator)
+		delete(vk_win_internal.swapchain_images) // Images are owned by swapchain
+		vk_win_internal.swapchain_images = nil
+		vk.DestroySwapchainKHR(logical_device, vk_win_internal.swapchain, p_vk_allocator)
+		vk_win_internal.swapchain = vk.NULL_HANDLE
+		// Render pass is not destroyed here as it's window-owned, assumed to be valid if we got this far.
+		return .Device_Creation_Failed
+	}
 	
+	// Initialize images_in_flight fence array (size of swapchain images)
+	// This should be done only once when the number of swapchain images is first known,
+	// or if it changes (unlikely without full swapchain recreation).
+	if vk_win_internal.images_in_flight == nil || len(vk_win_internal.images_in_flight) != int(sc_image_count) {
+		delete(vk_win_internal.images_in_flight) // Delete old slice if sizes differ (or first time)
+		vk_win_internal.images_in_flight = make([]vk.Fence, sc_image_count, allocator)
+		// Initialize all to NULL_HANDLE (Odin default for slices of pointers/handles)
+		log.debugf("Initialized images_in_flight fence array with size %d", sc_image_count)
+	}
+
+
 	vk_win_internal.recreating_swapchain = false // Successfully (re)created
+	return .None
+}
+
+
+// vk_destroy_framebuffers_internal cleans up framebuffers.
+vk_destroy_framebuffers_internal :: proc(logical_device: vk.Device, vk_win_internal: ^Vk_Window_Internal, p_vk_allocator: ^vk.AllocationCallbacks) {
+	if vk_win_internal == nil || vk_win_internal.framebuffers == nil {
+		return
+	}
+	log.debugf("Destroying %d framebuffers for swapchain %p", len(vk_win_internal.framebuffers), vk_win_internal.swapchain)
+	for _, fb in vk_win_internal.framebuffers {
+		if fb != vk.NULL_HANDLE {
+			vk.DestroyFramebuffer(logical_device, fb, p_vk_allocator)
+		}
+	}
+	delete(vk_win_internal.framebuffers)
+	vk_win_internal.framebuffers = nil
+}
+
+// vk_create_framebuffers_internal creates framebuffers for the swapchain image views.
+vk_create_framebuffers_internal :: proc(logical_device: vk.Device, vk_win_internal: ^Vk_Window_Internal, p_vk_allocator: ^vk.AllocationCallbacks) -> gfx_interface.Gfx_Error {
+	if vk_win_internal.render_pass == vk.NULL_HANDLE {
+		log.error("Cannot create framebuffers: Window render pass is NULL.")
+		return .Invalid_Handle // Or .Not_Ready
+	}
+	if len(vk_win_internal.swapchain_image_views) == 0 {
+		log.error("Cannot create framebuffers: No swapchain image views available.")
+		return .Not_Ready 
+	}
+
+	num_images := len(vk_win_internal.swapchain_image_views)
+	vk_win_internal.framebuffers = make([]vk.Framebuffer, num_images, vk_win_internal.allocator)
+	
+	for i := 0; i < num_images; i = i + 1 {
+		attachments := [1]vk.ImageView{vk_win_internal.swapchain_image_views[i]} // Array of one image view
+		fb_create_info := vk.FramebufferCreateInfo{
+			sType = .FRAMEBUFFER_CREATE_INFO,
+			renderPass = vk_win_internal.render_pass,
+			attachmentCount = 1,
+			pAttachments = &attachments[0],
+			width = vk_win_internal.swapchain_extent.width,
+			height = vk_win_internal.swapchain_extent.height,
+			layers = 1,
+		}
+		fb_res := vk.CreateFramebuffer(logical_device, &fb_create_info, p_vk_allocator, &vk_win_internal.framebuffers[i])
+		if fb_res != .SUCCESS {
+			log.errorf("vkCreateFramebuffer failed for image view %d. Result: %v", i, fb_res)
+			// Cleanup already created framebuffers for this attempt
+			for j := 0; j < i; j = j + 1 {
+				vk.DestroyFramebuffer(logical_device, vk_win_internal.framebuffers[j], p_vk_allocator)
+			}
+			delete(vk_win_internal.framebuffers)
+			vk_win_internal.framebuffers = nil
+			return .Device_Creation_Failed
+		}
+	}
+	log.infof("Created %d framebuffers successfully.", num_images)
 	return .None
 }
 
@@ -283,6 +390,10 @@ vk_destroy_swapchain_internal :: proc(logical_device: vk.Device, vk_win_internal
 	// especially if this is called outside of full device destruction.
 	// vk.DeviceWaitIdle(logical_device) // Consider if this is needed here or at a higher level
 
+	// Destroy Framebuffers first, as they depend on image views and render pass
+	vk_destroy_framebuffers_internal(logical_device, vk_win_internal, p_vk_allocator)
+
+	// Then destroy Image Views
 	vk_destroy_swapchain_image_views(logical_device, vk_win_internal, p_vk_allocator)
 	
 	// Swapchain images are owned by the swapchain and destroyed with it, so no explicit vkDestroyImage.
@@ -348,20 +459,139 @@ vk_create_window_wrapper :: proc(
 	// Swapchain and related fields (images, views, format, extent) will be set by vk_create_swapchain_internal_logic.
 	// vk_win_internal.swapchain is initially vk.NULL_HANDLE
 
-	// 4. Create Swapchain and Image Views
-	// This populates the rest of vk_win_internal (swapchain, images, views, format, extent)
+	// Set this window as the primary one for pipeline creation on the device.
+	// This is a simplification. A more robust app might have explicit primary window management.
+	vk_dev_internal.primary_window_for_pipeline = vk_win_internal
+	log.infof("Window %p (SDL: %s) set as primary_window_for_pipeline on device %p", 
+		vk_win_internal, title, vk_dev_internal)
+
+	// 4. Create Swapchain, RenderPass, ImageViews, Framebuffers
+	// This populates vk_win_internal with swapchain, images, views, format, extent, render_pass, framebuffers.
 	swap_err := vk_create_swapchain_internal_logic(vk_dev_internal, vk_win_internal, sdl_win)
 	if swap_err != .None {
-		log.errorf("Initial swapchain creation failed for window '%s': %s", title, gfx_interface.gfx_api.get_error_string(swap_err))
-		// Cleanup surface and SDL window
+		log.errorf("Initial swapchain and related resources creation failed for window '%s': %s", title, gfx_interface.gfx_api.get_error_string(swap_err))
+		if vk_win_internal.render_pass != vk.NULL_HANDLE { // If render pass was created by this attempt
+			vk.DestroyRenderPass(vk_dev_internal.logical_device, vk_win_internal.render_pass, nil)
+		}
 		vk.DestroySurfaceKHR(vk_dev_internal.vk_instance.instance, surface_handle, nil)
 		sdl.DestroyWindow(sdl_win)
-		free(vk_win_internal, allocator) // Free the partially created struct
+		free(vk_win_internal, allocator) 
 		return gfx_interface.Gfx_Window{}, swap_err
 	}
+
+	// 5. Create Synchronization Primitives and Command Buffers
+	// Semaphores and Fences
+	p_vk_allocator: ^vk.AllocationCallbacks = nil
+	semaphore_create_info := vk.SemaphoreCreateInfo{ sType = .SEMAPHORE_CREATE_INFO }
+	fence_create_info := vk.FenceCreateInfo{ sType = .FENCE_CREATE_INFO, flags = {.SIGNALED_BIT} } // Create fences in signaled state
+
+	for i := 0; i < MAX_FRAMES_IN_FLIGHT; i = i + 1 {
+		if vk.CreateSemaphore(vk_dev_internal.logical_device, &semaphore_create_info, p_vk_allocator, &vk_win_internal.image_available_semaphores[i]) != .SUCCESS ||
+		   vk.CreateSemaphore(vk_dev_internal.logical_device, &semaphore_create_info, p_vk_allocator, &vk_win_internal.render_finished_semaphores[i]) != .SUCCESS ||
+		   vk.CreateFence(vk_dev_internal.logical_device, &fence_create_info, p_vk_allocator, &vk_win_internal.in_flight_fences[i]) != .SUCCESS {
+			log.error("Failed to create synchronization primitives for a frame.")
+			// Cleanup already created sync objects, swapchain resources, surface, window... this is extensive.
+			// For now, consider this a fatal error for window creation.
+			// A full cleanup path would be needed in production.
+			vk_destroy_window_internal_resources(vk_win_internal) // Helper to destroy all vk_win_internal contents
+			return gfx_interface.Gfx_Window{}, .Initialization_Failed
+		}
+	}
+	log.infof("Created %d sets of frame synchronization primitives.", MAX_FRAMES_IN_FLIGHT)
+
+	// Command Buffers
+	cmd_buf_alloc_info := vk.CommandBufferAllocateInfo{
+		sType = .COMMAND_BUFFER_ALLOCATE_INFO,
+		commandPool = vk_dev_internal.command_pool,
+		level = .PRIMARY,
+		commandBufferCount = MAX_FRAMES_IN_FLIGHT,
+	}
+	cmd_buf_res := vk.AllocateCommandBuffers(vk_dev_internal.logical_device, &cmd_buf_alloc_info, &vk_win_internal.command_buffers[0])
+	if cmd_buf_res != .SUCCESS {
+		log.errorf("Failed to allocate command buffers: %v", cmd_buf_res)
+		vk_destroy_window_internal_resources(vk_win_internal)
+		return gfx_interface.Gfx_Window{}, .Initialization_Failed
+	}
+	log.infof("Allocated %d primary command buffers.", MAX_FRAMES_IN_FLIGHT)
 	
+	vk_win_internal.current_frame_index = 0 // Initialize current frame index
+
 	log.infof("Vulkan Gfx_Window wrapper created successfully for SDL window '%s'.", title)
 	return gfx_interface.Gfx_Window{variant = Vk_Window_Variant(vk_win_internal)}, .None
+}
+
+// vk_destroy_window_internal_resources is a helper to clean up all resources within Vk_Window_Internal
+// This is called on failure during creation or during full destruction.
+vk_destroy_window_internal_resources :: proc(vk_win: ^Vk_Window_Internal) {
+	if vk_win == nil { return }
+	
+	logical_device := vk_win.device_ref.logical_device // Assume device_ref is valid if vk_win is
+	instance       := vk_win.vk_instance.instance   // Assume vk_instance is valid
+	p_vk_allocator: ^vk.AllocationCallbacks = nil
+
+	// Wait for device idle before destroying window resources, especially if called outside full device destruction.
+	// This ensures command buffers, etc., are no longer in use.
+	if logical_device != vk.NULL_HANDLE {
+		vk.DeviceWaitIdle(logical_device)
+	}
+
+	// Destroy swapchain and its dependent resources (framebuffers, image views, images are handled by it)
+	vk_destroy_swapchain_internal(logical_device, vk_win, p_vk_allocator)
+
+	// Destroy render pass owned by the window
+	if vk_win.render_pass != vk.NULL_HANDLE {
+		log.debugf("Destroying window RenderPass: %p", vk_win.render_pass)
+		vk.DestroyRenderPass(logical_device, vk_win.render_pass, p_vk_allocator)
+		vk_win.render_pass = vk.NULL_HANDLE
+	}
+	
+	// Destroy synchronization primitives
+	for i := 0; i < MAX_FRAMES_IN_FLIGHT; i = i + 1 {
+		if vk_win.image_available_semaphores[i] != vk.NULL_HANDLE {
+			vk.DestroySemaphore(logical_device, vk_win.image_available_semaphores[i], p_vk_allocator)
+		}
+		if vk_win.render_finished_semaphores[i] != vk.NULL_HANDLE {
+			vk.DestroySemaphore(logical_device, vk_win.render_finished_semaphores[i], p_vk_allocator)
+		}
+		if vk_win.in_flight_fences[i] != vk.NULL_HANDLE {
+			vk.DestroyFence(logical_device, vk_win.in_flight_fences[i], p_vk_allocator)
+		}
+	}
+	log.debug("Destroyed frame synchronization primitives.")
+
+	// Command buffers are allocated from device's pool; freed when pool is destroyed or explicitly.
+	// If pool is device-global, explicit free here might be good if window is destroyed before device.
+	// For now, assume they are cleaned up with the command pool owned by Vk_Device_Internal.
+	// Or, if allocated specifically for this window and needs specific cleanup:
+	// if vk_win.device_ref != nil && vk_win.device_ref.command_pool != vk.NULL_HANDLE && vk_win.command_buffers[0] != vk.NULL_HANDLE {
+	// 	log.debugf("Freeing %d command buffers.", MAX_FRAMES_IN_FLIGHT)
+	// 	vk.FreeCommandBuffers(logical_device, vk_win.device_ref.command_pool, MAX_FRAMES_IN_FLIGHT, &vk_win.command_buffers[0])
+	// 	// Clear handles, though struct is about to be freed
+	// 	for i := 0; i < MAX_FRAMES_IN_FLIGHT; i=i+1 { vk_win.command_buffers[i] = vk.NULL_HANDLE }
+	// }
+
+
+	// Destroy surface
+	if vk_win.surface != vk.NULL_HANDLE {
+		vk.DestroySurfaceKHR(instance, vk_win.surface, p_vk_allocator)
+		log.info("Vulkan SurfaceKHR destroyed.")
+		vk_win.surface = vk.NULL_HANDLE
+	}
+	
+	// Destroy SDL window
+	if vk_win.sdl_window != nil {
+		sdl.DestroyWindow(vk_win.sdl_window)
+		log.info("SDL Window destroyed.")
+		vk_win.sdl_window = nil
+	}
+	
+	// Free slices owned by Vk_Window_Internal not covered by other destroys
+	delete(vk_win.images_in_flight) // Slice of fences, fences themselves destroyed above or managed by Vulkan
+
+	// Free the Vk_Window_Internal struct itself
+	// This should be done by the caller of this helper, vk_destroy_window_wrapper
+	// free(vk_win, vk_win.allocator) 
+	// log.info("Vk_Window_Internal struct freed.")
 }
 
 
@@ -371,26 +601,7 @@ vk_destroy_window_wrapper :: proc(window: gfx_interface.Gfx_Window) {
 			sdl.GetWindowTitle(vk_win.sdl_window) if vk_win.sdl_window != nil else "N/A", 
 			vk_win.surface)
 		
-		logical_device := vk_win.device_ref.logical_device
-		instance := vk_win.vk_instance.instance
-		p_vk_allocator: ^vk.AllocationCallbacks = nil
-
-		// Destroy swapchain resources (swapchain, image views)
-		vk_destroy_swapchain_internal(logical_device, vk_win, p_vk_allocator)
-
-		// Destroy surface
-		if vk_win.surface != vk.NULL_HANDLE {
-			vk.DestroySurfaceKHR(instance, vk_win.surface, p_vk_allocator)
-			log.info("Vulkan SurfaceKHR destroyed.")
-			vk_win.surface = vk.NULL_HANDLE
-		}
-		
-		// Destroy SDL window
-		if vk_win.sdl_window != nil {
-			sdl.DestroyWindow(vk_win.sdl_window)
-			log.info("SDL Window destroyed.")
-			vk_win.sdl_window = nil
-		}
+		vk_destroy_window_internal_resources(vk_win) // Call the helper
 		
 		// Free the Vk_Window_Internal struct itself
 		free(vk_win, vk_win.allocator)

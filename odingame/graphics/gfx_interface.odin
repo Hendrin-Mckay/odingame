@@ -87,14 +87,17 @@ Gfx_Window :: struct_variant {
 
 Gfx_Shader :: struct_variant {
 	// e.g. opengl: ^Gl_Shader
+	vulkan: ^rawptr, // Will hold ^vulkan.Vk_Shader_Internal
 }
 
 Gfx_Pipeline :: struct_variant {
     // e.g. opengl: ^Gl_Pipeline
+	vulkan: ^rawptr, // Will hold ^vulkan.Vk_Pipeline_Internal
 }
 
 Gfx_Buffer :: struct_variant {
 	// e.g. opengl: ^Gl_Buffer
+	vulkan: ^rawptr, // Will hold ^vulkan.Vk_Buffer_Internal
 }
 
 Gfx_Texture :: struct_variant {
@@ -193,6 +196,7 @@ Gfx_Device_Interface :: struct #ordered {
 	}
 
 	Gfx_Vertex_Array :: struct_variant { // e.g. opengl: ^Gl_Vertex_Array
+		vulkan: ^rawptr, // Will hold ^vulkan.Vk_Vertex_Array_Internal
 	}
 
 	// Creates a VAO. For OpenGL, this encapsulates VBO bindings, EBO binding, and vertex attribute pointers.

@@ -385,8 +385,25 @@ vk_create_logical_device_internal :: proc(
 	vk_device_internal := new(Vk_Device_Internal, allocator)
 	vk_device_internal.allocator = allocator
 	vk_device_internal.vk_instance = vk_instance_info
-	vk_device_internal.physical_device_info = physical_device_info // Store the selected physical device info
+	vk_device_internal.physical_device_info = physical_device_info
 	vk_device_internal.logical_device = logical_device_handle
+	vk_device_internal.primary_window_for_pipeline = nil // Initialized to nil
+	
+	// Create Command Pool
+	pool_create_info := vk.CommandPoolCreateInfo{
+		sType = .COMMAND_POOL_CREATE_INFO,
+		flags = {.RESET_COMMAND_BUFFER_BIT}, // Allow command buffers to be individually reset
+		queueFamilyIndex = indices.graphics_family.?, // Commands for graphics queue
+	}
+	cp_res := vk.CreateCommandPool(logical_device_handle, &pool_create_info, p_vk_allocator, &vk_device_internal.command_pool)
+	if cp_res != .SUCCESS {
+		log.errorf("vkCreateCommandPool failed. Result: %v", cp_res)
+		// Cleanup already created logical device
+		vk.DestroyDevice(logical_device_handle, p_vk_allocator)
+		free(vk_device_internal, allocator)
+		return nil, .Device_Creation_Failed
+	}
+	log.infof("Vulkan Command Pool created successfully: %p", vk_device_internal.command_pool)
 
 	// Get queue handles
 	// The queue index within the family is 0 since we only requested one queue (queueCount=1) per family.
@@ -525,6 +542,12 @@ vk_destroy_device_wrapper :: proc(device: gfx_interface.Gfx_Device) {
 		if vk_dev.logical_device != nil {
 			vk.DeviceWaitIdle(vk_dev.logical_device)
 			log.info("Vulkan Logical Device finished waiting for idle.")
+		}
+
+		// Destroy Command Pool (must be done before logical device)
+		if vk_dev.command_pool != vk.NULL_HANDLE && vk_dev.logical_device != nil {
+			log.infof("Destroying Vulkan Command Pool: %p", vk_dev.command_pool)
+			vk.DestroyCommandPool(vk_dev.logical_device, vk_dev.command_pool, nil) // pAllocator is nil
 		}
 
 		// Destroy logical device

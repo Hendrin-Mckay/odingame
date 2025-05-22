@@ -2,6 +2,7 @@ package vulkan
 
 import "../gfx_interface"
 import "core:log"
+import vk "vendor:vulkan" // Added for vk.CmdBindPipeline
 
 // --- Shader Management Wrappers ---
 
@@ -217,9 +218,15 @@ vk_begin_frame_wrapper :: proc(device: gfx_interface.Gfx_Device) {
 	}
 	primary_gfx_window := gfx_interface.Gfx_Window{variant = primary_window_ptr}
 	
-	ok, _, _ := vk_begin_frame_internal(primary_gfx_window)
+	ok, active_cmd_buf, acquired_image_idx := vk_begin_frame_internal(primary_gfx_window)
 	if !ok {
-		log.warn("vk_begin_frame_wrapper: vk_begin_frame_internal indicated an issue (e.g. swapchain out of date).")
+		log.warn("vk_begin_frame_wrapper: vk_begin_frame_internal failed or indicated an issue (e.g., swapchain out of date or command buffer problem). Review specific logs from vk_begin_frame_internal for details.")
+		// Depending on the design, we might want to return an error or status from the wrapper too.
+		// For now, just logging as per current structure.
+	} else {
+		// Successfully acquired image and begun command buffer.
+		// The active_cmd_buf and acquired_image_idx are stored in primary_window_ptr by vk_begin_frame_internal.
+		log.debugf("vk_begin_frame_wrapper: Frame begun successfully on primary window. Acquired image index: %d. Active command buffer: %p.", acquired_image_idx, active_cmd_buf)
 	}
 }
 
@@ -235,8 +242,12 @@ vk_end_frame_wrapper :: proc(device: gfx_interface.Gfx_Device) {
 	}
 	primary_gfx_window := gfx_interface.Gfx_Window{variant = primary_window_ptr}
 
-	if !vk_end_frame_internal(primary_gfx_window) {
-		log.warn("vk_end_frame_wrapper: vk_end_frame_internal indicated an issue (e.g. swapchain out of date or present failed).")
+	frame_ended_successfully := vk_end_frame_internal(primary_gfx_window)
+	if !frame_ended_successfully {
+		log.warn("vk_end_frame_wrapper: vk_end_frame_internal indicated an issue. This could be due to a swapchain problem (e.g., out of date, suboptimal) requiring recreation, or a failure during command submission or presentation. Check logs from vk_end_frame_internal for specifics.")
+		// Depending on application design, further error propagation or explicit swapchain recreation triggering might be needed here.
+	} else {
+		log.debug("vk_end_frame_wrapper: Frame ended and presented successfully on primary window.")
 	}
 }
 
@@ -252,6 +263,10 @@ vk_clear_screen_wrapper :: proc(device: gfx_interface.Gfx_Device, options: gfx_i
 
 	primary_gfx_window := gfx_interface.Gfx_Window{variant = primary_window_ptr}
 	vk_clear_screen_internal(primary_gfx_window, options)
+	// vk_clear_screen_internal itself logs details about the render pass and image index.
+	// The wrapper can add a more general log.
+	log.debugf("vk_clear_screen_wrapper: Screen clear initiated for primary window. Options - Color: %v (value: %v), Depth: %v, Stencil: %v", 
+		options.clear_color, options.color, options.clear_depth, options.clear_stencil)
 }
 
 
@@ -264,6 +279,8 @@ vk_set_viewport_wrapper :: proc(device: gfx_interface.Gfx_Device, viewport: gfx_
 		return 
 	}
 	vk_set_viewport_internal(primary_window_ptr.active_command_buffer, viewport)
+	log.debugf("vk_set_viewport_wrapper: Viewport set on active command buffer %p. X: %.1f, Y: %.1f, W: %.1f, H: %.1f, MinD: %.1f, MaxD: %.1f", 
+		primary_window_ptr.active_command_buffer, viewport.x, viewport.y, viewport.width, viewport.height, viewport.min_depth, viewport.max_depth)
 }
 
 vk_set_scissor_wrapper :: proc(device: gfx_interface.Gfx_Device, scissor: gfx_interface.Scissor) {
@@ -275,19 +292,56 @@ vk_set_scissor_wrapper :: proc(device: gfx_interface.Gfx_Device, scissor: gfx_in
 		return 
 	}
 	vk_set_scissor_internal(primary_window_ptr.active_command_buffer, scissor)
+	log.debugf("vk_set_scissor_wrapper: Scissor set on active command buffer %p. X: %d, Y: %d, W: %d, H: %d", 
+		primary_window_ptr.active_command_buffer, scissor.x, scissor.y, scissor.width, scissor.height)
 }
 
-vk_set_pipeline_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline) {
-	vk_dev, ok_dev := device.variant.(Vk_Device_Variant)
-	if !ok_dev || vk_dev == nil { log.error("vk_set_pipeline_wrapper: Invalid Gfx_Device."); return }
-	primary_window_ptr := vk_dev.primary_window_for_pipeline
-	if primary_window_ptr == nil { 
-		log.error("vk_set_pipeline_wrapper: No primary window for context.")
-		return 
+vk_set_pipeline_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline_handle_gfx: gfx_interface.Gfx_Pipeline) {
+	vk_dev_variant, ok_dev := device.variant.(Vk_Device_Variant)
+	if !ok_dev || vk_dev_variant == nil {
+		log.error("vk_set_pipeline_wrapper: Invalid Gfx_Device or nil variant.")
+		return
 	}
-	// active_command_buffer check is implicitly done by vk_set_pipeline_internal
-	primary_gfx_window := gfx_interface.Gfx_Window{variant = primary_window_ptr}
-	vk_set_pipeline_internal(primary_gfx_window, pipeline)
+
+	primary_window_ptr := vk_dev_variant.primary_window_for_pipeline
+	if primary_window_ptr == nil {
+		log.error("vk_set_pipeline_wrapper: No primary window associated with the device.")
+		return
+	}
+
+	active_cmd_buf := primary_window_ptr.active_command_buffer
+	if active_cmd_buf == vk.NULL_HANDLE {
+		log.error("vk_set_pipeline_wrapper: No active command buffer on the primary window.")
+		return
+	}
+
+	// The Gfx_Pipeline.variant is documented as ^rawptr which should hold ^vulkan.Vk_Pipeline_Internal
+	// So, first cast rawptr to (^Vk_Pipeline_Internal)
+	vk_pipeline_internal_raw_ptr, ok_raw_ptr := pipeline_handle_gfx.variant.(^rawptr)
+	if !ok_raw_ptr || vk_pipeline_internal_raw_ptr == nil {
+		log.errorf("vk_set_pipeline_wrapper: Gfx_Pipeline variant is not ^rawptr or is nil. Type: %T", pipeline_handle_gfx.variant)
+		return
+	}
+    
+	// Then cast the rawptr itself to the concrete pointer type.
+	// This requires Vk_Pipeline_Internal to be an imported type or defined in the current package.
+	// Assuming it's accessible as vk_pipeline.Vk_Pipeline_Internal or just Vk_Pipeline_Internal if in same package.
+	// Based on vk_create_pipeline_internal, it seems Vk_Pipeline_Internal is directly accessible.
+	vk_pipeline_internal_ptr := (^Vk_Pipeline_Internal)(vk_pipeline_internal_raw_ptr^) // Dereference rawptr then cast
+    
+	if vk_pipeline_internal_ptr == nil { // Check after casting the raw pointer's content
+		log.error("vk_set_pipeline_wrapper: Gfx_Pipeline's internal Vulkan pipeline pointer is nil after casting.")
+		return
+	}
+
+	actual_vk_pipeline := vk_pipeline_internal_ptr.pipeline // Accessing the vk.Pipeline field
+	if actual_vk_pipeline == vk.NULL_HANDLE {
+		log.error("vk_set_pipeline_wrapper: Vk_Pipeline_Internal contains a NULL Vulkan pipeline handle.")
+		return
+	}
+
+	vk.CmdBindPipeline(active_cmd_buf, .GRAPHICS, actual_vk_pipeline)
+	log.debugf("vk_set_pipeline_wrapper: Successfully bound pipeline %p to command buffer %p.", actual_vk_pipeline, active_cmd_buf)
 }
 
 vk_set_vertex_buffer_wrapper :: proc(device: gfx_interface.Gfx_Device, buffer: gfx_interface.Gfx_Buffer, binding_index: u32 = 0, offset: u32 = 0) {
@@ -373,8 +427,46 @@ vk_stub_get_texture_height :: proc(texture: gfx_interface.Gfx_Texture) -> int {
     log.warn("Vulkan: get_texture_height not implemented.")
     return 0
 }
-vk_stub_draw_indexed :: proc(device: gfx_interface.Gfx_Device, index_count, instance_count, first_index, base_vertex, first_instance: u32) {
-	log.warn("Vulkan: draw_indexed not implemented.")
+
+vk_draw_indexed_wrapper :: proc(
+	device: gfx_interface.Gfx_Device, 
+	index_count: u32, 
+	instance_count: u32, 
+	first_index: u32, 
+	base_vertex: u32, // Note: Gfx_Device_Interface uses u32
+	first_instance: u32,
+) {
+	vk_dev, ok_dev := device.variant.(Vk_Device_Variant)
+	if !ok_dev || vk_dev == nil {
+		log.error("vk_draw_indexed_wrapper: Invalid Gfx_Device or nil variant.")
+		return
+	}
+
+	primary_window_ptr := vk_dev.primary_window_for_pipeline
+	if primary_window_ptr == nil {
+		log.error("vk_draw_indexed_wrapper: No primary window set on device for drawing operations.")
+		return
+	}
+
+	active_cmd_buf := primary_window_ptr.active_command_buffer
+	if active_cmd_buf == vk.NULL_HANDLE {
+		log.error("vk_draw_indexed_wrapper: No active command buffer on primary window for drawing.")
+		return
+	}
+
+	// Call the internal function, casting base_vertex from u32 to i32
+	vk_draw_indexed_internal(
+		active_cmd_buf,
+		index_count,
+		instance_count,
+		first_index,
+		i32(base_vertex), // Cast u32 to i32 for vk_draw_indexed_internal
+		first_instance,
+	)
+	// vk_draw_indexed_internal already logs the specifics of vk.CmdDrawIndexed call.
+	// This wrapper can log a more general message if needed, or rely on internal's log.
+	// For consistency with vk_draw_wrapper, let's add a high-level log.
+	log.debugf("vk_draw_indexed_wrapper: Indexed draw call issued. IndexCount: %d, InstanceCount: %d", index_count, instance_count)
 }
 
 // --- VAO Management Wrappers ---
@@ -494,7 +586,7 @@ initialize_vulkan_backend :: proc() {
 		destroy_shader             = vk_destroy_shader_wrapper,
         create_pipeline            = vk_create_pipeline_wrapper, // Now implemented
         destroy_pipeline           = vk_destroy_pipeline_wrapper, // Now implemented
-        set_pipeline               = vk_stub_set_pipeline, // Still a stub
+        set_pipeline               = vk_set_pipeline_wrapper, // Now points to the implemented wrapper
 
 		// Buffer Management (Implemented via wrappers)
 		create_buffer              = vk_create_buffer_wrapper,
@@ -521,8 +613,8 @@ initialize_vulkan_backend :: proc() {
 		clear_screen               = vk_stub_clear_screen,
         set_viewport               = vk_stub_set_viewport,
         set_scissor                = vk_stub_set_scissor,
-		draw                       = vk_stub_draw,
-		draw_indexed               = vk_stub_draw_indexed,
+		draw                       = vk_draw_wrapper, // Assuming vk_draw_wrapper is already implemented
+		draw_indexed               = vk_draw_indexed_wrapper, // Point to the new wrapper
 
 		// Uniforms (Stubs)
 		set_uniform_mat4           = vk_stub_set_uniform_mat4,

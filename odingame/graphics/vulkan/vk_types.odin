@@ -135,6 +135,22 @@ Vk_Window_Internal :: struct {
 	recreating_swapchain: bool, // Flag to indicate swapchain needs recreation (e.g. after resize)
 }
 
+// Vk_Texture_Internal holds Vulkan specific data for a texture.
+// This will be the variant data for Gfx_Texture.
+Vk_Texture_Internal :: struct {
+	image:               vk.Image,
+	image_view:          vk.ImageView,
+	memory:              vk.DeviceMemory,
+	sampler:             vk.Sampler, // A default sampler might be created with the texture
+	width:               u32,
+	height:              u32,
+	format:              vk.Format,
+	usage:               vk.ImageUsageFlags,
+	device_ref:          ^Vk_Device_Internal, // Reference to the logical device for destruction
+	// allocator:        mem.Allocator, // If this struct itself or its members need specific allocation tracking
+}
+
+
 // --- Gfx_Device and Gfx_Window variants for Vulkan ---
 // These are the types that will be stored in the Gfx_Device and Gfx_Window struct_variants.
 Vk_Device_Variant :: ^Vk_Device_Internal

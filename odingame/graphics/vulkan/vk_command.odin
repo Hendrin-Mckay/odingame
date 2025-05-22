@@ -374,8 +374,32 @@ vk_draw_internal :: proc(
 	vk.CmdDraw(active_cmd_buf, vertex_count, instance_count, first_vertex, first_instance)
 }
 
-// TODO: vk_draw_indexed_internal for indexed drawing.
-// vk_draw_indexed_internal :: proc(...) { vk.CmdDrawIndexed(...) }
+// vk_draw_indexed_internal performs an indexed draw.
+vk_draw_indexed_internal :: proc(
+	active_cmd_buf: vk.CommandBuffer,
+	index_count: u32,
+	instance_count: u32,
+	first_index: u32,
+	base_vertex: i32, // vk.CmdDrawIndexed takes base_vertex as i32
+	first_instance: u32,
+) {
+	if active_cmd_buf == vk.NULL_HANDLE { 
+		log.error("vk_draw_indexed_internal: No active command buffer.")
+		return 
+	}
+	
+	vk.CmdDrawIndexed(
+		active_cmd_buf, 
+		index_count, 
+		instance_count, 
+		first_index, 
+		base_vertex, 
+		first_instance,
+	)
+	// Log details of the draw call
+	log.debugf("vk_draw_indexed_internal: vk.CmdDrawIndexed recorded. IndexCount: %d, InstanceCount: %d, FirstIndex: %d, BaseVertex: %d, FirstInstance: %d",
+		index_count, instance_count, first_index, base_vertex, first_instance)
+}
 
 // TODO: vk_set_index_buffer_internal
 // vk_set_index_buffer_internal :: proc(...) { vk.CmdBindIndexBuffer(...) }

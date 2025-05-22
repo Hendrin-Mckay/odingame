@@ -11,9 +11,10 @@ import ocore "../../odingame/core"
 import ogfx "../../odingame/graphics"
 import oinput "../../odingame/input"
 import omath "../../odingame/math"
+import "core:math/linalg" // For orthographic_rh_zo
 
 // Global game variables
-player_texture: ^ogfx.Texture2D
+player_texture: ogfx.Gfx_Texture // Changed from ^ogfx.Texture2D
 player_pos: omath.Vector2f
 player_speed: f32 = 200.0 // pixels per second
 
@@ -26,36 +27,37 @@ game_initialize :: proc(game: ^ocore.Game) {
 
 game_load_content :: proc(game: ^ocore.Game) {
     fmt.println("Game Load Content")
-    // Try loading sprite.png first, then sprite.png.txt as a fallback for this example
-    tex, err := ogfx.texture_from_file("examples/simple_game/sprite.png") 
-    if err != nil {
-        fmt.eprintln("Failed to load texture 'examples/simple_game/sprite.png':", err)
-        // Attempt to load the placeholder text file name, just to acknowledge it.
-        // The actual texture_from_file will likely fail for a .txt, which is fine.
-        tex_txt, err_txt := ogfx.texture_from_file("examples/simple_game/sprite.png.txt")
-        if err_txt != nil {
-             fmt.eprintln("Also failed to load 'examples/simple_game/sprite.png.txt':", err_txt)
+    // Use the new texture loading function which requires Gfx_Device
+    // load_texture_from_file_gfx was defined in odingame/graphics/texture.odin
+    tex, err := ogfx.load_texture_from_file_gfx(game.window.gfx_device, "examples/simple_game/sprite.png")
+    if err != .None { // Compare with Gfx_Error.None
+        fmt.eprintln("Failed to load texture 'examples/simple_game/sprite.png':", ogfx.gfx_api.get_error_string(err))
+        // Attempt to load the placeholder text file name (this will also likely fail with the new loader)
+        _, err_txt := ogfx.load_texture_from_file_gfx(game.window.gfx_device, "examples/simple_game/sprite.png.txt")
+        if err_txt != .None {
+             fmt.eprintln("Also failed to load 'examples/simple_game/sprite.png.txt':", ogfx.gfx_api.get_error_string(err_txt))
         } else {
-            // This case should ideally not be hit if .txt is not a valid image.
-            // If it were, we'd free it as it's not the intended sprite.
-            ogfx.destroy_texture(tex_txt) 
-            fmt.println("Note: Placeholder 'sprite.png.txt' was loaded but is not a usable texture.")
+            // This case should ideally not be hit. If it were, destroy the unwanted texture.
+            // Assuming _ is the handle, which is not stored here.
+            // This part of the logic might need rethinking if .txt could be valid.
+            fmt.println("Note: Placeholder 'sprite.png.txt' was loaded but is not a usable texture (this is unexpected).")
         }
-        // Player texture will remain nil, draw function should handle this
+        // player_texture remains an uninitialized Gfx_Texture, draw function should handle this
     } else {
         player_texture = tex
         fmt.println("Loaded texture 'examples/simple_game/sprite.png' successfully!")
     }
     
-    // Initial position: center of the game window
-    player_pos = omath.Vector2f{
-        f32(game.window.width)/2, 
-        f32(game.window.height)/2,
+    player_w: f32 = 0
+    player_h: f32 = 0
+    if ogfx.is_gfx_texture_valid(player_texture) { // Use new validity check
+        player_w = f32(ogfx.gfx_api.get_texture_width(player_texture))
+        player_h = f32(ogfx.gfx_api.get_texture_height(player_texture))
     }
-    // Adjust position to center the sprite, if texture was loaded
-    if player_texture != nil { 
-         player_pos.x -= f32(player_texture.width)/2
-         player_pos.y -= f32(player_texture.height)/2
+
+    player_pos = omath.Vector2f{
+        f32(ocore.get_window_width(game.window))/2 - player_w/2, 
+        f32(ocore.get_window_height(game.window))/2 - player_h/2,
     }
 }
 
@@ -81,15 +83,18 @@ game_update :: proc(game: ^ocore.Game, game_time: ocore.GameTime) {
     // Ensure player_pos does not go too far off screen before wrapping
     player_w := f32(0)
     player_h := f32(0)
-    if player_texture != nil {
-        player_w = f32(player_texture.width)
-        player_h = f32(player_texture.height)
+    if ogfx.is_gfx_texture_valid(player_texture) {
+        player_w = f32(ogfx.gfx_api.get_texture_width(player_texture))
+        player_h = f32(ogfx.gfx_api.get_texture_height(player_texture))
     }
 
-    if player_pos.x + player_w < 0 { player_pos.x = f32(game.window.width) }
-    if player_pos.x > f32(game.window.width) { player_pos.x = -player_w }
-    if player_pos.y + player_h < 0 { player_pos.y = f32(game.window.height) }
-    if player_pos.y > f32(game.window.height) { player_pos.y = -player_h }
+    window_w := f32(ocore.get_window_width(game.window))
+    window_h := f32(ocore.get_window_height(game.window))
+
+    if player_pos.x + player_w < 0 { player_pos.x = window_w }
+    if player_pos.x > window_w { player_pos.x = -player_w }
+    if player_pos.y + player_h < 0 { player_pos.y = window_h }
+    if player_pos.y > window_h { player_pos.y = -player_h }
 
 
     if oinput.is_key_pressed(.ESCAPE) {
@@ -98,20 +103,40 @@ game_update :: proc(game: ^ocore.Game, game_time: ocore.GameTime) {
 }
 
 game_draw :: proc(game: ^ocore.Game, game_time: ocore.GameTime) {
-    ogfx.clear(game.graphics_device, ogfx.CORNFLOWER_BLUE)
+    // Clear screen using gfx_api
+    // Cornflower Blue: R=100, G=149, B=237 -> normalized: 0.39, 0.58, 0.93
+    clear_color := [4]f32{100/255, 149/255, 237/255, 1.0}
+    clear_options := ogfx.Clear_Options{
+        color = clear_color,
+        clear_color = true,
+        clear_depth = true, // Assuming depth buffer is used or available
+        depth = 1.0,
+    }
+    ogfx.gfx_api.clear_screen(game.window.gfx_device, clear_options)
 
-    ogfx.begin(game.sprite_batch, nil) // Use default orthographic projection (identity model-view)
+    // Begin SpriteBatch with an orthographic projection
+    proj_matrix := linalg.orthographic_rh_zo(
+        0, 
+        f32(ocore.get_window_width(game.window)), 
+        f32(ocore.get_window_height(game.window)), 
+        0, 
+        -1, 
+        1,
+    )
+    ogfx.begin_batch(game.sprite_batch, proj_matrix)
 
-    if player_texture != nil && player_texture.gl_id != 0 {
-        // Draw player sprite
-        ogfx.draw_simple(game.sprite_batch, player_texture, player_pos, ogfx.WHITE)
+    if ogfx.is_gfx_texture_valid(player_texture) {
+        // Draw player sprite using the new SpriteBatch draw_texture method
+        // `ocore.WHITE` should be a `ocore.Color` struct {r,g,b,a: u8}
+        ogfx.draw_texture(game.sprite_batch, player_texture, player_pos, ocore.WHITE)
     } else {
-        // Optionally, print a message to screen or draw a placeholder rect
-        // For now, just prints to console via game_load_content's error message
+        // Player texture not loaded or invalid
     }
     
-    ogfx.end(game.sprite_batch)
-    ogfx.present(game.graphics_device, game.window)
+    ogfx.end_batch(game.sprite_batch)
+
+    // Present the window using gfx_api
+    ogfx.gfx_api.present_window(game.window.gfx_window)
 }
 
 // --- Main ---

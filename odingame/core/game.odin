@@ -6,6 +6,16 @@ import "../graphics"
 import "../input"
 import "core:fmt" // For error printing in run
 
+// Basic Color struct and constants, can be moved to a separate core/colors.odin
+Color :: struct { r, g, b, a: u8 }
+
+WHITE :: Color{255, 255, 255, 255}
+BLACK :: Color{0, 0, 0, 255}
+RED :: Color{255, 0, 0, 255}
+GREEN :: Color{0, 255, 0, 255}
+BLUE :: Color{0, 0, 255, 255}
+CORNFLOWER_BLUE :: Color{100, 149, 237, 255} // Used in simple_game
+
 // User-defined game functions
 InitializeFn :: proc(game: ^Game)
 LoadContentFn :: proc(game: ^Game)
@@ -19,8 +29,8 @@ GameTime :: struct {
 
 Game :: struct {
     // Modules
-    window:          ^Window,
-    graphics_device: ^graphics.Device,
+    window:          ^Window, // Window now holds Gfx_Device and Gfx_Window
+    // graphics_device field is removed, access via game.window.gfx_device
     sprite_batch:    ^graphics.SpriteBatch, 
     // Input state is managed globally in 'input' package
 
@@ -55,35 +65,47 @@ _new_game_for_run :: proc(title: string, width, height: int) -> (^Game, error) {
 		return nil, err_msg
 	}
 
-	game := new(Game)
+	game := new(Game) // Allocated with context.allocator by default
 
-	win, err_win := new_window(title, width, height)
-	if err_win != nil {
+	// --- Initialize Graphics API ---
+	// This is a new, crucial step. Must be called before any gfx_api functions.
+	graphics.initialize_sdl_opengl_backend() 
+	// We need an allocator for the graphics device. Game's context.allocator can be used.
+	main_gfx_device, device_err := graphics.gfx_api.create_device(&context.allocator)
+	if device_err != .None {
+		log.errorf("_new_game_for_run: Failed to create Gfx_Device: %s", graphics.gfx_api.get_error_string(device_err))
 		sdl2.image.Quit()
 		sdl2.Quit()
-		free(game) // Free partially allocated game
+		free(game)
+		return nil, device_err // Propagate Gfx_Error
+	}
+	// --- End Initialize Graphics API ---
+
+	// Create core.Window, passing the Gfx_Device
+	// core.new_window now takes Gfx_Device
+	win, err_win := new_window(main_gfx_device, title, width, height)
+	if err_win != nil {
+		log.errorf("_new_game_for_run: Failed to create core.Window: %v", err_win)
+		graphics.gfx_api.destroy_device(main_gfx_device) // Clean up created device
+		sdl2.image.Quit()
+		sdl2.Quit()
+		free(game)
 		return nil, err_win
 	}
 	game.window = win
+	// game.graphics_device is no longer a direct field of Game. Access via game.window.gfx_device.
 
-	dev, err_dev := graphics.new_device(win)
-	if err_dev != nil {
-		destroy_window(win) 
+	// Initialize SpriteBatch, passing the Gfx_Device from the window
+	// new_sprite_batch now takes Gfx_Device. Width/height are not needed for SB construction anymore.
+	sb, sb_err := graphics.new_spritebatch(game.window.gfx_device) // Max sprites defaults in new_spritebatch
+	if sb_err != .None {
+		log.errorf("_new_game_for_run: Failed to create SpriteBatch: %s", graphics.gfx_api.get_error_string(sb_err))
+		// Full cleanup: destroy window (which destroys Gfx_Window), then device.
+		destroy_window(game.window) // This calls gfx_api.destroy_window
+		graphics.gfx_api.destroy_device(main_gfx_device)
 		sdl2.image.Quit()
 		sdl2.Quit()
-		free(game) // Free partially allocated game
-		return nil, err_dev
-	}
-	game.graphics_device = dev
-
-	// Initialize SpriteBatch
-	sb, sb_err := graphics.new_sprite_batch(dev, width, height)
-	if sb_err != nil {
-		graphics.destroy_device(dev)
-		destroy_window(win)
-		sdl2.image.Quit()
-		sdl2.Quit()
-		free(game) // Free partially allocated game
+		free(game)
 		return nil, sb_err
 	}
 	game.sprite_batch = sb
@@ -105,13 +127,23 @@ _destroy_game :: proc(game: ^Game) {
 	
 	// User unload content would be called here if it existed
 
-	graphics.destroy_sprite_batch(game.sprite_batch) // Destroy sprite batch
-	graphics.destroy_device(game.graphics_device)
-	destroy_window(game.window)
-	
+	// Destroy SpriteBatch first, as it uses the graphics device.
+	graphics.destroy_spritebatch(game.sprite_batch) 
 	game.sprite_batch = nil
-	game.graphics_device = nil 
+	
+	// Store device handle before window is destroyed, as window owns it conceptually for access.
+	// However, the device's lifecycle might outlive a single window if multiple windows were supported.
+	// For this single-window game, game.window.gfx_device is the main device.
+	device_to_destroy := game.window.gfx_device
+
+	// Destroy core.Window (which in turn calls gfx_api.destroy_window for the Gfx_Window)
+	destroy_window(game.window)
 	game.window = nil
+	
+	// Now destroy the Gfx_Device
+	if is_valid(device_to_destroy) { // Check if device handle is valid before destroying
+		graphics.gfx_api.destroy_device(device_to_destroy)
+	}
 
 	sdl2.image.Quit()
 	sdl2.Quit() 
@@ -195,12 +227,27 @@ run :: proc(
         // Only draw if game is still running (e.g. update didn't call exit)
         if game.running && game.draw_fn != nil {
             game.draw_fn(game, game.game_time)
-        } else if game.running { // Default draw if no user draw_fn and still running
-            // graphics.clear(game.graphics_device, graphics.BLACK) // Example default
-            // graphics.present(game.graphics_device, game.window)
+        } else if game.running { 
+            // Default draw behavior if no user draw_fn is provided
+            // This now uses the gfx_api via the window's device and Gfx_Window handles.
+            if game.window != nil && is_valid(game.window.gfx_device) && game.window.gfx_window.variant != nil {
+                default_clear_opts := graphics.default_clear_options() // Get default clear options
+                // Modify if needed, e.g. game.window.gfx_device.set_clear_color(...) if that existed,
+                // or pass custom Clear_Options.
+                graphics.gfx_api.clear_screen(game.window.gfx_device, default_clear_opts)
+                
+                // User draw calls would happen here conceptually if draw_fn was a simpler "render scene"
+                // and game loop handled clear/present.
+                
+                err_present := graphics.gfx_api.present_window(game.window.gfx_window)
+                if err_present != .None {
+                    log.errorf("Game loop: Failed to present window: %s", graphics.gfx_api.get_error_string(err_present))
+                    // Potentially set game.running = false or handle error
+                }
+            }
         }
         
-        // Yield CPU if necessary - VSync is preferred (set with GL_SetSwapInterval)
+        // Yield CPU if necessary - VSync is preferred (set with GL_SetSwapInterval via Gfx_Window creation)
         // sdl2.Delay(1) 
     }
 

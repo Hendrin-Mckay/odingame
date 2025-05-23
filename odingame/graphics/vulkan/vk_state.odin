@@ -1,9 +1,10 @@
 package vulkan
 
 import vk "vendor:vulkan"
+import "../../common" // For common.Engine_Error
 import "core:log"
 import "core:mem"
-import "../gfx_interface"
+import "../gfx_interface" // For Gfx_Error enum members that might be used in comments or logic
 
 // --- State Management ---
 
@@ -49,11 +50,11 @@ vk_set_blend_state_internal :: proc(
     src_alpha: vk.BlendFactor = .ONE,
     dst_alpha: vk.BlendFactor = .ZERO,
     op_alpha: vk.BlendOp = .ADD,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error { // Changed Gfx_Error to common.Engine_Error
     // Note: In Vulkan, blend state is part of the pipeline state
     // This function is a no-op in Vulkan as blend state must be specified at pipeline creation
     // Consider removing this function or making it a helper for pipeline creation
-    return .None
+    return common.Engine_Error.None
 }
 
 // vk_set_depth_state_internal configures the depth test state

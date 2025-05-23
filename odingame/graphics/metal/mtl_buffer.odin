@@ -1,24 +1,25 @@
 package metal
 
 import "../gfx_interface"
+import "../../common" // For common.Engine_Error
 import "core:log"
 
 // --- Gfx_Device_Interface Buffer Management Stubs ---
 
-mtl_create_buffer_wrapper :: proc(device: gfx_interface.Gfx_Device, type: gfx_interface.Buffer_Type, size: int, data: rawptr = nil, dynamic: bool = false) -> (gfx_interface.Gfx_Buffer, gfx_interface.Gfx_Error) {
+mtl_create_buffer_wrapper :: proc(device: gfx_interface.Gfx_Device, type: gfx_interface.Buffer_Type, size: int, data: rawptr = nil, dynamic: bool = false) -> (gfx_interface.Gfx_Buffer, common.Engine_Error) {
 	log.warn("Metal: create_buffer_wrapper not implemented.")
 	// Real Metal: id<MTLDevice>.newBuffer(length: size, options: options) or newBuffer(bytes: data, length: size, options: options).
 	// Options would include MTLResourceOptions (e.g. storageModeShared, storageModePrivate, cpuCacheModeWriteCombined).
 	// `dynamic` would influence storageMode (e.g. shared or managed for CPU access).
-	return gfx_interface.Gfx_Buffer{}, .Not_Implemented
+	return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Not_Implemented
 }
 
-mtl_update_buffer_wrapper :: proc(buffer: gfx_interface.Gfx_Buffer, offset: int, data: rawptr, size: int) -> gfx_interface.Gfx_Error {
+mtl_update_buffer_wrapper :: proc(buffer: gfx_interface.Gfx_Buffer, offset: int, data: rawptr, size: int) -> common.Engine_Error {
 	log.warn("Metal: update_buffer_wrapper not implemented.")
 	// Real Metal: For buffers with CPU access (e.g. shared or managed with CPU cache write combined),
 	// get contents: id<MTLBuffer>.contents(). Then unsafe.copy to the memory region.
 	// offset and size apply to the destination pointer from contents().
-	return .Not_Implemented
+	return common.Engine_Error.Not_Implemented
 }
 
 mtl_destroy_buffer_wrapper :: proc(buffer: gfx_interface.Gfx_Buffer) {

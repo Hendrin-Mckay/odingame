@@ -4,59 +4,6 @@ import "../common" // For Engine_Error
 import "../types" // For common types like Vector2, Color, etc.
 import "core:math"
 
-// DEPRECATED: This enum is being phased out in favor of common.Engine_Error
-// New code should use common.Engine_Error directly
-// This will be removed in a future version
-@(deprecated="Use common.Engine_Error instead")
-Gfx_Error :: enum {
-	None,                   // No error occurred
-	Initialization_Failed,  // Graphics system initialization failed
-	Device_Creation_Failed, // Graphics device creation failed
-	Window_Creation_Failed, // Window creation failed
-	Shader_Compilation_Failed, // Shader compilation failed
-	Buffer_Creation_Failed, // Buffer creation failed
-	Texture_Creation_Failed, // Texture creation failed
-	Invalid_Handle,        // Invalid graphics handle
-	Not_Implemented,       // Feature not implemented yet
-}
-
-// Convert from Gfx_Error to common.Engine_Error
-// DEPRECATED: This conversion will be unnecessary once Gfx_Error is removed
-@(deprecated="Will be removed when Gfx_Error is removed")
-gfx_error_to_engine_error :: proc(err: Gfx_Error) -> common.Engine_Error {
-    switch err {
-    case .None:                    return .None
-    case .Initialization_Failed:   return .Graphics_Initialization_Failed
-    case .Device_Creation_Failed:  return .Device_Creation_Failed
-    case .Window_Creation_Failed:  return .Window_Creation_Failed
-    case .Shader_Compilation_Failed: return .Shader_Compilation_Failed
-    case .Buffer_Creation_Failed:  return .Buffer_Creation_Failed
-    case .Texture_Creation_Failed: return .Texture_Creation_Failed
-    case .Invalid_Handle:          return .Invalid_Handle
-    case .Not_Implemented:         return .Not_Implemented
-    }
-    return .Invalid_Operation
-}
-
-// Convert from common.Engine_Error to Gfx_Error
-// DEPRECATED: This conversion will be unnecessary once Gfx_Error is removed
-@(deprecated="Will be removed when Gfx_Error is removed")
-engine_error_to_gfx_error :: proc(err: common.Engine_Error) -> Gfx_Error {
-    switch err {
-    case .None:                        return .None
-    case .Graphics_Initialization_Failed: return .Initialization_Failed
-    case .Device_Creation_Failed:      return .Device_Creation_Failed
-    case .Window_Creation_Failed:      return .Window_Creation_Failed
-    case .Shader_Compilation_Failed:   return .Shader_Compilation_Failed
-    case .Buffer_Creation_Failed:      return .Buffer_Creation_Failed
-    case .Texture_Creation_Failed:     return .Texture_Creation_Failed
-    case .Invalid_Handle:              return .Invalid_Handle
-    case .Not_Implemented:             return .Not_Implemented
-    case:                              return .Initialization_Failed
-    }
-    return .Initialization_Failed
-}
-
 Gfx_Handle :: distinct u32
 
 INVALID_HANDLE :: Gfx_Handle(0)
@@ -144,6 +91,10 @@ Scissor :: types.Recti
 
 Gfx_Device :: struct {
 	variant: rawptr // Will hold the backend-specific device pointer
+}
+
+is_valid :: proc(d: Gfx_Device) -> bool {
+	return d.variant != nil
 }
 
 Gfx_Window :: struct {

@@ -102,7 +102,7 @@ _new_game_for_run :: proc(title: string, width, height: int, backend_type: graph
 		sdl2.image.Quit()
 		sdl2.Quit()
 		free(game)
-		return nil, graphics.gfx_error_to_engine_error(device_err) // Convert Gfx_Error to Engine_Error
+		return nil, device_err // Already common.Engine_Error
 	}
 	// --- End Initialize Graphics API ---
 
@@ -132,7 +132,7 @@ _new_game_for_run :: proc(title: string, width, height: int, backend_type: graph
 		sdl2.image.Quit()
 		sdl2.Quit()
 		free(game)
-		return nil, graphics.gfx_error_to_engine_error(sb_err) // Convert Gfx_Error to Engine_Error
+		return nil, sb_err // Already common.Engine_Error
 	}
 	game.sprite_batch = sb
 	

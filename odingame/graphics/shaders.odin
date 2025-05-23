@@ -1,6 +1,7 @@
 package graphics
 
 import gl "vendor:OpenGL/gl"
+import "../common" // For common.Engine_Error
 import "core:fmt"
 import "core:log"
 import "core:strings"
@@ -26,11 +27,11 @@ Gl_Pipeline :: struct {
 // --- Helper Functions (OpenGL specific, not directly part of the interface) ---
 
 @(private="file")
-gl_compile_shader_source :: proc(source: string, stage: Shader_Stage, shader_type: gl.GLenum) -> (u32, Gfx_Error) {
+gl_compile_shader_source :: proc(source: string, stage: Shader_Stage, shader_type: gl.GLenum) -> (u32, common.Engine_Error) {
 	shader_id := gl.CreateShader(shader_type)
 	if shader_id == 0 {
 		log.errorf("glCreateShader failed for stage %v", stage)
-		return 0, .Shader_Compilation_Failed
+		return 0, common.Engine_Error.Shader_Compilation_Failed
 	}
 
 	// Odin strings are not necessarily null-terminated. OpenGL expects a C-string.
@@ -55,21 +56,21 @@ gl_compile_shader_source :: proc(source: string, stage: Shader_Stage, shader_typ
 		gl.GetShaderInfoLog(shader_id, info_log_length, nil, rawptr(info_log_buffer))
 		log.errorf("Shader compilation failed for stage %v: %s", stage, string(info_log_buffer))
 		gl.DeleteShader(shader_id)
-		return 0, .Shader_Compilation_Failed
+		return 0, common.Engine_Error.Shader_Compilation_Failed
 	}
 
 	log.infof("Shader for stage %v compiled successfully (ID: %v)", stage, shader_id)
-	return shader_id, .None
+	return shader_id, common.Engine_Error.None
 }
 
 
 // --- Implementation of Gfx_Device_Interface shader/pipeline functions ---
 
-gl_create_shader_from_source_impl :: proc(device: Gfx_Device, source: string, stage: Shader_Stage) -> (Gfx_Shader, Gfx_Error) {
+gl_create_shader_from_source_impl :: proc(device: Gfx_Device, source: string, stage: Shader_Stage) -> (Gfx_Shader, common.Engine_Error) {
 	device_ptr, ok_device := device.variant.(^Gl_Device)
 	if !ok_device {
 		log.error("gl_create_shader_from_source: Invalid Gfx_Device type.")
-		return Gfx_Shader{}, .Invalid_Handle
+		return Gfx_Shader{}, common.Engine_Error.Invalid_Handle
 	}
 
 	shader_type: gl.GLenum
@@ -82,7 +83,7 @@ gl_create_shader_from_source_impl :: proc(device: Gfx_Device, source: string, st
 	// 	shader_type = gl.COMPUTE_SHADER
 	case:
 		log.errorf("Unsupported shader stage: %v", stage)
-		return Gfx_Shader{}, .Shader_Compilation_Failed // Or a more specific error
+		return Gfx_Shader{}, common.Engine_Error.Shader_Compilation_Failed // Or a more specific error
 	}
 
 	shader_id, err := gl_compile_shader_source(source, stage, shader_type)
@@ -95,15 +96,15 @@ gl_create_shader_from_source_impl :: proc(device: Gfx_Device, source: string, st
 	gl_shader_ptr.stage = stage
 	gl_shader_ptr.main_allocator = device_ptr.main_allocator
 
-	return Gfx_Shader{gl_shader_ptr}, .None
+	return Gfx_Shader{gl_shader_ptr}, common.Engine_Error.None
 }
 
-gl_create_shader_from_bytecode_impl :: proc(device: Gfx_Device, bytecode: []u8, stage: Shader_Stage) -> (Gfx_Shader, Gfx_Error) {
+gl_create_shader_from_bytecode_impl :: proc(device: Gfx_Device, bytecode: []u8, stage: Shader_Stage) -> (Gfx_Shader, common.Engine_Error) {
 	// OpenGL Core Profile typically doesn't use precompiled shader bytecode directly via glShaderBinary
 	// in the same way as Vulkan/DX12. SPIR-V can be used with ARB_gl_spirv, but that's an extension.
 	// For now, this is not implemented for general GLSL.
 	log.warn("gl_create_shader_from_bytecode: Not typically used with GLSL in core profile. Use source.")
-	return Gfx_Shader{}, .Not_Implemented
+	return Gfx_Shader{}, common.Engine_Error.Not_Implemented
 }
 
 gl_destroy_shader_impl :: proc(shader: Gfx_Shader) {
@@ -118,22 +119,22 @@ gl_destroy_shader_impl :: proc(shader: Gfx_Shader) {
 	}
 }
 
-gl_create_pipeline_impl :: proc(device: Gfx_Device, shaders: []Gfx_Shader) -> (Gfx_Pipeline, Gfx_Error) {
+gl_create_pipeline_impl :: proc(device: Gfx_Device, shaders: []Gfx_Shader) -> (Gfx_Pipeline, common.Engine_Error) {
 	device_ptr, ok_device := device.variant.(^Gl_Device)
 	if !ok_device {
 		log.error("gl_create_pipeline: Invalid Gfx_Device type.")
-		return Gfx_Pipeline{}, .Invalid_Handle
+		return Gfx_Pipeline{}, common.Engine_Error.Invalid_Handle
 	}
 
 	if len(shaders) == 0 {
 		log.error("gl_create_pipeline: No shaders provided to create pipeline.")
-		return Gfx_Pipeline{}, .Shader_Compilation_Failed // Or a more specific error
+		return Gfx_Pipeline{}, common.Engine_Error.Shader_Compilation_Failed // Or a more specific error
 	}
 
 	program_id := gl.CreateProgram()
 	if program_id == 0 {
 		log.error("glCreateProgram failed.")
-		return Gfx_Pipeline{}, .Shader_Compilation_Failed // Or a more specific error
+		return Gfx_Pipeline{}, common.Engine_Error.Shader_Compilation_Failed // Or a more specific error
 	}
 
 	attached_gl_shaders := make([]^Gl_Shader, 0, len(shaders))
@@ -148,7 +149,7 @@ gl_create_pipeline_impl :: proc(device: Gfx_Device, shaders: []Gfx_Shader) -> (G
 				gl.DetachShader(program_id, attached_shader_ptr.id)
 			}
 			gl.DeleteProgram(program_id)
-			return Gfx_Pipeline{}, .Invalid_Handle
+			return Gfx_Pipeline{}, common.Engine_Error.Invalid_Handle
 		}
 		gl.AttachShader(program_id, shader_ptr.id)
 		append(&attached_gl_shaders, shader_ptr) // Keep track for detaching if link fails
@@ -174,7 +175,7 @@ gl_create_pipeline_impl :: proc(device: Gfx_Device, shaders: []Gfx_Shader) -> (G
 			gl.DetachShader(program_id, shader_ptr.id)
 		}
 		gl.DeleteProgram(program_id)
-		return Gfx_Pipeline{}, .Shader_Compilation_Failed
+		return Gfx_Pipeline{}, common.Engine_Error.Shader_Compilation_Failed
 	}
 
 	log.infof("Shader program ID %v linked successfully.", program_id)
@@ -207,7 +208,7 @@ gl_create_pipeline_impl :: proc(device: Gfx_Device, shaders: []Gfx_Shader) -> (G
 	pipeline_ptr.main_allocator = device_ptr.main_allocator
 	// pipeline_ptr.shaders = shaders // This would be a shallow copy of the slice. Need deep copy if variant data is complex.
 
-	return Gfx_Pipeline{pipeline_ptr}, .None
+	return Gfx_Pipeline{pipeline_ptr}, common.Engine_Error.None
 }
 
 gl_destroy_pipeline_impl :: proc(pipeline: Gfx_Pipeline) {
@@ -266,7 +267,7 @@ gl_set_pipeline_impl :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline) {
 
 
 // --- Uniform Setting Implementations ---
-import "core:strings" // For strings.clone_to_cstring
+// import "core:strings" // Already imported at top
 
 @(private="file")
 get_uniform_location :: proc(pipeline_ptr: ^Gl_Pipeline, name_str: string) -> i32 {
@@ -287,69 +288,69 @@ get_uniform_location :: proc(pipeline_ptr: ^Gl_Pipeline, name_str: string) -> i3
 	return loc
 }
 
-gl_set_uniform_mat4_impl :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, mat: matrix[4,4]f32) -> Gfx_Error {
+gl_set_uniform_mat4_impl :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, mat: matrix[4,4]f32) -> common.Engine_Error {
 	pipeline_ptr, ok := pipeline.variant.(^Gl_Pipeline)
-	if !ok { return .Invalid_Handle }
+	if !ok { return common.Engine_Error.Invalid_Handle }
 
 	loc := get_uniform_location(pipeline_ptr, name)
 	if loc != -1 {
 		gl.UniformMatrix4fv(loc, 1, false, &mat[0,0])
-		return .None
+		return common.Engine_Error.None
 	}
-	return .Invalid_Handle 
+	return common.Engine_Error.Invalid_Handle 
 }
 
-gl_set_uniform_vec2_impl :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, vec: [2]f32) -> Gfx_Error {
+gl_set_uniform_vec2_impl :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, vec: [2]f32) -> common.Engine_Error {
 	pipeline_ptr, ok := pipeline.variant.(^Gl_Pipeline)
-	if !ok { return .Invalid_Handle }
+	if !ok { return common.Engine_Error.Invalid_Handle }
 	loc := get_uniform_location(pipeline_ptr, name)
 	if loc != -1 {
 		gl.Uniform2fv(loc, 1, &vec[0])
-		return .None
+		return common.Engine_Error.None
 	}
-	return .Invalid_Handle
+	return common.Engine_Error.Invalid_Handle
 }
 
-gl_set_uniform_vec3_impl :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, vec: [3]f32) -> Gfx_Error {
+gl_set_uniform_vec3_impl :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, vec: [3]f32) -> common.Engine_Error {
 	pipeline_ptr, ok := pipeline.variant.(^Gl_Pipeline)
-	if !ok { return .Invalid_Handle }
+	if !ok { return common.Engine_Error.Invalid_Handle }
 	loc := get_uniform_location(pipeline_ptr, name)
 	if loc != -1 {
 		gl.Uniform3fv(loc, 1, &vec[0])
-		return .None
+		return common.Engine_Error.None
 	}
-	return .Invalid_Handle
+	return common.Engine_Error.Invalid_Handle
 }
 
-gl_set_uniform_vec4_impl :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, vec: [4]f32) -> Gfx_Error {
+gl_set_uniform_vec4_impl :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, vec: [4]f32) -> common.Engine_Error {
 	pipeline_ptr, ok := pipeline.variant.(^Gl_Pipeline)
-	if !ok { return .Invalid_Handle }
+	if !ok { return common.Engine_Error.Invalid_Handle }
 	loc := get_uniform_location(pipeline_ptr, name)
 	if loc != -1 {
 		gl.Uniform4fv(loc, 1, &vec[0])
-		return .None
+		return common.Engine_Error.None
 	}
-	return .Invalid_Handle
+	return common.Engine_Error.Invalid_Handle
 }
 
-gl_set_uniform_int_impl :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, val: i32) -> Gfx_Error {
+gl_set_uniform_int_impl :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, val: i32) -> common.Engine_Error {
 	pipeline_ptr, ok := pipeline.variant.(^Gl_Pipeline)
-	if !ok { return .Invalid_Handle }
+	if !ok { return common.Engine_Error.Invalid_Handle }
 	loc := get_uniform_location(pipeline_ptr, name)
 	if loc != -1 {
 		gl.Uniform1i(loc, val)
-		return .None
+		return common.Engine_Error.None
 	}
-	return .Invalid_Handle
+	return common.Engine_Error.Invalid_Handle
 }
 
-gl_set_uniform_float_impl :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, val: f32) -> Gfx_Error {
+gl_set_uniform_float_impl :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, val: f32) -> common.Engine_Error {
 	pipeline_ptr, ok := pipeline.variant.(^Gl_Pipeline)
-	if !ok { return .Invalid_Handle }
+	if !ok { return common.Engine_Error.Invalid_Handle }
 	loc := get_uniform_location(pipeline_ptr, name)
 	if loc != -1 {
 		gl.Uniform1f(loc, val)
-		return .None
+		return common.Engine_Error.None
 	}
-	return .Invalid_Handle
+	return common.Engine_Error.Invalid_Handle
 }

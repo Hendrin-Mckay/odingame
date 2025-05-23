@@ -3,7 +3,8 @@ package vulkan
 import vk "vendor:vulkan"
 import "core:log"
 import "core:mem"
-import "../gfx_interface" // For Gfx_Device, Gfx_Error, Gfx_Vertex_Array, Vertex_Format, Vertex_Buffer_Layout, Gfx_Buffer
+import "../gfx_interface" // For Gfx_Device, Gfx_Vertex_Array, Vertex_Format, Vertex_Buffer_Layout, Gfx_Buffer
+import "../../common" // For common.Engine_Error
 
 // --- Aliases for Vulkan Structs (for clarity or potential future extension) ---
 Vk_Vertex_Input_Binding_Description :: vk.VertexInputBindingDescription
@@ -50,12 +51,12 @@ vk_create_vertex_array_internal :: proc(
 	vertex_buffer_layouts: []gfx_interface.Vertex_Buffer_Layout,
 	vertex_buffers: []gfx_interface.Gfx_Buffer, // Must match layouts in terms of binding points
 	index_buffer_param: gfx_interface.Gfx_Buffer, // Using _param to avoid conflict if Gfx_Buffer is named 'index_buffer'
-) -> (gfx_interface.Gfx_Vertex_Array, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Vertex_Array, common.Engine_Error) {
 
 	vk_dev_internal, ok_dev := gfx_device.variant.(Vk_Device_Variant)
 	if !ok_dev || vk_dev_internal == nil {
 		log.error("vk_create_vertex_array: Invalid Gfx_Device (not Vulkan or nil variant).")
-		return gfx_interface.Gfx_Vertex_Array{}, .Invalid_Handle
+		return gfx_interface.Gfx_Vertex_Array{}, common.Engine_Error.Invalid_Handle
 	}
 	allocator := vk_dev_internal.allocator
 
@@ -122,7 +123,7 @@ vk_create_vertex_array_internal :: proc(
 				free(vk_vao_internal.vertex_buffers_gfx)
 				free(vk_vao_internal.vertex_buffer_offsets)
 				free(vk_vao_internal)
-				return gfx_interface.Gfx_Vertex_Array{}, .Invalid_Handle // Or .Shader_Compilation_Failed if format is for shaders
+				return gfx_interface.Gfx_Vertex_Array{}, common.Engine_Error.Invalid_Handle // Or .Shader_Compilation_Failed if format is for shaders
 			}
 			
 			attribute := Vk_Vertex_Input_Attribute_Description{

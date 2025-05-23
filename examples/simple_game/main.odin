@@ -11,6 +11,7 @@ import ocore "../../odingame/core"
 import ogfx "../../odingame/graphics"
 import oinput "../../odingame/input"
 import omath "../../odingame/math"
+import ocommon "../../odingame/common" // Added for common.Engine_Error
 import "core:math/linalg" // For orthographic_rh_zo
 
 // Global game variables
@@ -30,12 +31,12 @@ game_load_content :: proc(game: ^ocore.Game) {
     // Use the new texture loading function which requires Gfx_Device
     // load_texture_from_file_gfx was defined in odingame/graphics/texture.odin
     tex, err := ogfx.load_texture_from_file_gfx(game.window.gfx_device, "examples/simple_game/sprite.png")
-    if err != .None { // Compare with Gfx_Error.None
-        fmt.eprintln("Failed to load texture 'examples/simple_game/sprite.png':", ogfx.gfx_api.get_error_string(err))
+    if err != .None { // Now comparing with common.Engine_Error.None (implicitly, as .None is universal)
+        fmt.eprintln("Failed to load texture 'examples/simple_game/sprite.png':", ocommon.engine_error_to_string(err))
         // Attempt to load the placeholder text file name (this will also likely fail with the new loader)
         _, err_txt := ogfx.load_texture_from_file_gfx(game.window.gfx_device, "examples/simple_game/sprite.png.txt")
         if err_txt != .None {
-             fmt.eprintln("Also failed to load 'examples/simple_game/sprite.png.txt':", ogfx.gfx_api.get_error_string(err_txt))
+             fmt.eprintln("Also failed to load 'examples/simple_game/sprite.png.txt':", ocommon.engine_error_to_string(err_txt))
         } else {
             // This case should ideally not be hit. If it were, destroy the unwanted texture.
             // Assuming _ is the handle, which is not stored here.

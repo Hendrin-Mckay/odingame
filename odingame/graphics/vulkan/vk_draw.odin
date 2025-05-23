@@ -1,6 +1,7 @@
 package vulkan
 
 import vk "vendor:vulkan"
+import "../../common" // For common.Engine_Error
 import "core:log"
 import "core:mem"
 import "../gfx_interface"
@@ -10,18 +11,18 @@ import "../gfx_interface"
 // vk_begin_frame_internal starts a new frame
 vk_begin_frame_internal :: proc(
     window: gfx_interface.Gfx_Window,
-) -> (command_buffer: vk.CommandBuffer, image_index: u32, err: gfx_interface.Gfx_Error) {
+) -> (command_buffer: vk.CommandBuffer, image_index: u32, err: common.Engine_Error) {
     // Get the Vulkan window and device
     vk_win_internal, ok_win := window.variant.(^Vk_Window_Internal)
     if !ok_win || vk_win_internal == nil {
         log.error("vk_begin_frame: Invalid Gfx_Window (not Vulkan or nil variant).")
-        return 0, 0, .Invalid_Handle
+        return 0, 0, common.Engine_Error.Invalid_Handle
     }
     
     vk_dev_internal := vk_win_internal.device_ref
     if vk_dev_internal == nil {
         log.error("vk_begin_frame: Device reference is nil.")
-        return 0, 0, .Invalid_Handle
+        return 0, 0, common.Engine_Error.Invalid_Handle
     }
 
     // Wait for the previous frame to finish
@@ -45,10 +46,15 @@ vk_begin_frame_internal :: proc(
 
     if result == .ERROR_OUT_OF_DATE_KHR {
         // Handle window resize
-        return 0, 0, .Window_Resized
+        // This specific error might need to be bubbled up if not handled by a recreation here.
+        // For now, mapping to a generic Vulkan_Error or a specific Window_Resized if that exists.
+        // Let's assume Window_Resized is available in common.Engine_Error or should be.
+        // The Gfx_Error version returned .Window_Resized which is not standard.
+        // For now, using Vulkan_Swapchain_Error as a placeholder for resize-related issues.
+        return 0, 0, common.Engine_Error.Vulkan_Swapchain_Error 
     } else if result != .SUCCESS && result != .SUBOPTIMAL_KHR {
         log.errorf("Failed to acquire swapchain image: %v", result)
-        return 0, 0, .Device_Error
+        return 0, 0, common.Engine_Error.Vulkan_Swapchain_Error
     }
 
     // Reset the fence for the current frame
@@ -68,7 +74,7 @@ vk_begin_frame_internal :: proc(
 
     if vk.BeginCommandBuffer(command_buffer, &begin_info) != .SUCCESS {
         log.error("Failed to begin recording command buffer")
-        return 0, 0, .Device_Error
+        return 0, 0, common.Engine_Error.Vulkan_Error
     }
 
     // Begin render pass
@@ -111,7 +117,7 @@ vk_begin_frame_internal :: proc(
     }
     vk.CmdSetScissor(command_buffer, 0, 1, &scissor)
 
-    return command_buffer, image_index, .None
+    return command_buffer, image_index, common.Engine_Error.None
 }
 
 // vk_end_frame_internal ends the current frame and presents it
@@ -119,18 +125,18 @@ vk_end_frame_internal :: proc(
     window: gfx_interface.Gfx_Window,
     command_buffer: vk.CommandBuffer,
     image_index: u32,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     // Get the Vulkan window and device
     vk_win_internal, ok_win := window.variant.(^Vk_Window_Internal)
     if !ok_win || vk_win_internal == nil {
         log.error("vk_end_frame: Invalid Gfx_Window (not Vulkan or nil variant).")
-        return .Invalid_Handle
+        return common.Engine_Error.Invalid_Handle
     }
     
     vk_dev_internal := vk_win_internal.device_ref
     if vk_dev_internal == nil {
         log.error("vk_end_frame: Device reference is nil.")
-        return .Invalid_Handle
+        return common.Engine_Error.Invalid_Handle
     }
 
     // End render pass
@@ -139,7 +145,7 @@ vk_end_frame_internal :: proc(
     // End command buffer
     if vk.EndCommandBuffer(command_buffer) != .SUCCESS {
         log.error("Failed to record command buffer")
-        return .Device_Error
+        return common.Engine_Error.Vulkan_Error
     }
 
     // Submit command buffer
@@ -172,7 +178,7 @@ vk_end_frame_internal :: proc(
         vk_win_internal.in_flight_fences[vk_win_internal.current_frame],
     ) != .SUCCESS {
         log.error("Failed to submit draw command buffer")
-        return .Device_Error
+        return common.Engine_Error.Vulkan_Error
     }
 
     // Present the frame
@@ -190,16 +196,17 @@ vk_end_frame_internal :: proc(
 
     result := vk.QueuePresentKHR(vk_dev_internal.present_queue, &present_info)
     if result == .ERROR_OUT_OF_DATE_KHR || result == .SUBOPTIMAL_KHR {
-        return .Window_Resized
+        // Similar to acquire, map to a swapchain related error.
+        return common.Engine_Error.Vulkan_Swapchain_Error 
     } else if result != .SUCCESS {
         log.errorf("Failed to present swapchain image: %v", result)
-        return .Device_Error
+        return common.Engine_Error.Vulkan_Swapchain_Error
     }
 
     // Update the current frame index
     vk_win_internal.current_frame = (vk_win_internal.current_frame + 1) % MAX_FRAMES_IN_FLIGHT
 
-    return .None
+    return common.Engine_Error.None
 }
 
 // vk_draw_internal records a draw command

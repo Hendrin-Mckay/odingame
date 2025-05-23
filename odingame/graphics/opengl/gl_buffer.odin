@@ -1,6 +1,7 @@
 package opengl
 
 import "../gfx_interface"
+import "../../common" // For common.Engine_Error
 import "core:log"
 import "core:mem"
 import "core:os"
@@ -36,14 +37,14 @@ create_buffer_impl :: proc(
     size: int,
     data: rawptr = nil,
     usage: gfx_interface.Buffer_Usage = .Static,
-) -> (gfx_interface.Gfx_Buffer, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Buffer, common.Engine_Error) {
     // Convert buffer type
     buffer_type: Buffer_Type
     switch type {
     case .Vertex:   buffer_type = .Vertex
     case .Index:    buffer_type = .Index
     case .Uniform:  buffer_type = .Uniform
-    case:           return gfx_interface.Gfx_Buffer{}, .Buffer_Creation_Failed
+    case:           return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
     }
     
     // Convert usage
@@ -52,14 +53,14 @@ create_buffer_impl :: proc(
     case .Static:  buffer_usage = .Static
     case .Dynamic: buffer_usage = .Dynamic
     case .Stream:  buffer_usage = .Stream
-    case:          return gfx_interface.Gfx_Buffer{}, .Buffer_Creation_Failed
+    case:          return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
     }
     
     // Create buffer
     var buffer_id: u32
     gl.GenBuffers(1, &buffer_id)
     if buffer_id == 0 {
-        return gfx_interface.Gfx_Buffer{}, .Buffer_Creation_Failed
+        return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
     }
     
     // Bind and initialize buffer
@@ -85,13 +86,13 @@ update_buffer_impl :: proc(
     offset: int,
     size: int,
     data: rawptr,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     if buffer_obj, ok := buffer.variant.(^Buffer); ok && !buffer_obj.is_mapped {
         gl.BindBuffer(cast(u32)buffer_obj.type, buffer_obj.id)
         gl.BufferSubData(cast(u32)buffer_obj.type, offset, size, data)
         return .None
     }
-    return .Invalid_Handle
+    return common.Engine_Error.Invalid_Handle
 }
 
 destroy_buffer_impl :: proc(buffer: gfx_interface.Gfx_Buffer) {
@@ -104,7 +105,7 @@ destroy_buffer_impl :: proc(buffer: gfx_interface.Gfx_Buffer) {
 map_buffer_impl :: proc(
     buffer: gfx_interface.Gfx_Buffer,
     access: gfx_interface.Map_Access,
-) -> (rawptr, gfx_interface.Gfx_Error) {
+) -> (rawptr, common.Engine_Error) {
     if buffer_obj, ok := buffer.variant.(^Buffer); ok && !buffer_obj.is_mapped {
         gl.BindBuffer(cast(u32)buffer_obj.type, buffer_obj.id)
         
@@ -113,7 +114,7 @@ map_buffer_impl :: proc(
         case .Read:         gl_access = gl.READ_ONLY
         case .Write:        gl_access = gl.WRITE_ONLY
         case .Read_Write:   gl_access = gl.READ_WRITE
-        case:               return nil, .Invalid_Handle
+        case:               return nil, common.Engine_Error.Invalid_Handle
         }
         
         ptr := gl.MapBuffer(cast(u32)buffer_obj.type, gl_access)
@@ -122,10 +123,10 @@ map_buffer_impl :: proc(
             return ptr, .None
         }
     }
-    return nil, .Invalid_Handle
+    return nil, common.Engine_Error.Invalid_Handle
 }
 
-unmap_buffer_impl :: proc(buffer: gfx_interface.Gfx_Buffer) -> gfx_interface.Gfx_Error {
+unmap_buffer_impl :: proc(buffer: gfx_interface.Gfx_Buffer) -> common.Engine_Error {
     if buffer_obj, ok := buffer.variant.(^Buffer); ok && buffer_obj.is_mapped {
         gl.BindBuffer(cast(u32)buffer_obj.type, buffer_obj.id)
         if gl.UnmapBuffer(cast(u32)buffer_obj.type) {
@@ -133,7 +134,7 @@ unmap_buffer_impl :: proc(buffer: gfx_interface.Gfx_Buffer) -> gfx_interface.Gfx
             return .None
         }
     }
-    return .Invalid_Handle
+    return common.Engine_Error.Invalid_Handle
 }
 
 // --- Buffer Binding ---
@@ -144,12 +145,12 @@ set_vertex_buffer_impl :: proc(
     buffer: gfx_interface.Gfx_Buffer,
     offset: int,
     stride: int,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     if buffer_obj, ok := buffer.variant.(^Buffer); ok && buffer_obj.type == .Vertex {
         gl.BindVertexBuffer(binding, buffer_obj.id, offset, stride)
         return .None
     }
-    return .Invalid_Handle
+    return common.Engine_Error.Invalid_Handle
 }
 
 set_index_buffer_impl :: proc(
@@ -157,12 +158,12 @@ set_index_buffer_impl :: proc(
     buffer: gfx_interface.Gfx_Buffer,
     offset: int,
     index_type: gfx_interface.Index_Type,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     if buffer_obj, ok := buffer.variant.(^Buffer); ok && buffer_obj.type == .Index {
         gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffer_obj.id)
         return .None
     }
-    return .Invalid_Handle
+    return common.Engine_Error.Invalid_Handle
 }
 
 // --- Drawing ---
@@ -172,7 +173,7 @@ draw_impl :: proc(
     instance_count: u32 = 1,
     first_vertex: u32 = 0,
     first_instance: u32 = 0,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     if instance_count == 1 {
         gl.DrawArrays(gl.TRIANGLES, i32(first_vertex), i32(vertex_count))
     } else {
@@ -188,7 +189,7 @@ draw_indexed_impl :: proc(
     first_index: u32 = 0,
     vertex_offset: i32 = 0,
     first_instance: u32 = 0,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     index_type_size := size_of(u16) // Assuming 16-bit indices
     
     if instance_count == 1 {

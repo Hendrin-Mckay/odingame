@@ -1,10 +1,12 @@
 package graphics
 
+import "../common" // For common.Engine_Error
 import "core:fmt"
 import "core:log"
 import "core:mem"
 import "core:os"
 import "core:runtime"
+import "core:unsafe"
 
 import sdl "vendor:sdl2"
 import gl "vendor:OpenGL/gl" 
@@ -33,13 +35,13 @@ Gl_Window :: struct {
 
 // --- Implementation of Gfx_Device_Interface for SDL/OpenGL ---
 
-gl_create_device :: proc(allocator: ^rawptr) -> (Gfx_Device, Gfx_Error) {
+gl_create_device :: proc(allocator: ^rawptr) -> (Gfx_Device, common.Engine_Error) {
 	// Initialize SDL video subsystem if not already initialized.
 	// In a multi-window scenario, this should only happen once.
 	if !sdl.WasInit(sdl.INIT_VIDEO) {
 		if sdl.InitSubSystem(sdl.INIT_VIDEO) != 0 {
 			log.errorf("SDL_InitSubSystem(SDL_INIT_VIDEO) failed: %s", sdl.GetError())
-			return Gfx_Device{}, .Initialization_Failed
+			return Gfx_Device{}, common.Engine_Error.Graphics_Initialization_Failed
 		}
 	}
 
@@ -49,7 +51,7 @@ gl_create_device :: proc(allocator: ^rawptr) -> (Gfx_Device, Gfx_Error) {
 	gl_device_ptr.video_initialized = true // Mark that we initialized it (or it was already)
 
 	log.info("Logical Gfx_Device (SDL/OpenGL) created.")
-	return Gfx_Device{gl_device_ptr}, .None
+	return Gfx_Device{gl_device_ptr}, common.Engine_Error.None
 }
 
 gl_destroy_device :: proc(device: Gfx_Device) {
@@ -71,11 +73,11 @@ gl_destroy_device :: proc(device: Gfx_Device) {
 	}
 }
 
-gl_create_window :: proc(device: Gfx_Device, title: string, width, height: int) -> (Gfx_Window, Gfx_Error) {
+gl_create_window :: proc(device: Gfx_Device, title: string, width, height: int) -> (Gfx_Window, common.Engine_Error) {
 	device_ptr, ok_device := device.variant.(^Gl_Device)
 	if !ok_device {
 		log.error("gl_create_window: Invalid Gfx_Device type.")
-		return Gfx_Window{}, .Invalid_Handle // Or Device_Creation_Failed
+		return Gfx_Window{}, common.Engine_Error.Invalid_Handle // Or Device_Creation_Failed
 	}
 
 	// Ensure SDL_GL attributes are set before creating window and context
@@ -93,14 +95,14 @@ gl_create_window :: proc(device: Gfx_Device, title: string, width, height: int) 
 	sdl_win := sdl.CreateWindow(title, sdl.WINDOWPOS_CENTERED, sdl.WINDOWPOS_CENTERED, width, height, sdl_win_flags)
 	if sdl_win == nil {
 		log.errorf("SDL_CreateWindow failed: %s", sdl.GetError())
-		return Gfx_Window{}, .Window_Creation_Failed
+		return Gfx_Window{}, common.Engine_Error.Window_Creation_Failed
 	}
 
 	gl_ctx := sdl.GL_CreateContext(sdl_win)
 	if gl_ctx == nil {
 		log.errorf("SDL_GL_CreateContext failed: %s", sdl.GetError())
 		sdl.DestroyWindow(sdl_win)
-		return Gfx_Window{}, .Device_Creation_Failed // Context creation is part of device setup
+		return Gfx_Window{}, common.Engine_Error.Device_Creation_Failed // Context creation is part of device setup
 	}
 
 	// Initialize OpenGL procedure loader for the current context
@@ -108,7 +110,7 @@ gl_create_window :: proc(device: Gfx_Device, title: string, width, height: int) 
 		log.errorf("Failed to load OpenGL functions: %s", sdl.GetError()) // Or gl.get_error_string() if available
 		sdl.GL_DeleteContext(gl_ctx)
 		sdl.DestroyWindow(sdl_win)
-		return Gfx_Window{}, .Device_Creation_Failed
+		return Gfx_Window{}, common.Engine_Error.Device_Creation_Failed
 	}
 
 	// Make context current for this window
@@ -138,7 +140,7 @@ gl_create_window :: proc(device: Gfx_Device, title: string, width, height: int) 
 	window_ptr.main_allocator = device_ptr.main_allocator
 
 	log.infof("Gfx_Window (SDL/OpenGL) '%s' (%dx%d) created.", title, width, height)
-	return Gfx_Window{window_ptr}, .None
+	return Gfx_Window{window_ptr}, common.Engine_Error.None
 }
 
 gl_destroy_window :: proc(window: Gfx_Window) {
@@ -156,20 +158,20 @@ gl_destroy_window :: proc(window: Gfx_Window) {
 	}
 }
 
-gl_present_window :: proc(window: Gfx_Window) -> Gfx_Error {
+gl_present_window :: proc(window: Gfx_Window) -> common.Engine_Error {
 	if window_ptr, ok := window.variant.(^Gl_Window); ok {
 		if window_ptr.sdl_window != nil {
 			sdl.GL_SwapWindow(window_ptr.sdl_window)
-			return .None
+			return common.Engine_Error.None
 		}
 		log.error("gl_present_window: SDL window handle is nil.")
-		return .Invalid_Handle
+		return common.Engine_Error.Invalid_Handle
 	}
 	log.errorf("gl_present_window: Invalid window type %v", window.variant)
-	return .Invalid_Handle
+	return common.Engine_Error.Invalid_Handle
 }
 
-gl_resize_window :: proc(window: Gfx_Window, width, height: int) -> Gfx_Error {
+gl_resize_window :: proc(window: Gfx_Window, width, height: int) -> common.Engine_Error {
 	if window_ptr, ok := window.variant.(^Gl_Window); ok {
 		if window_ptr.sdl_window != nil {
 			// SDL doesn't have a direct "resize window and update viewport" function.
@@ -188,11 +190,11 @@ gl_resize_window :: proc(window: Gfx_Window, width, height: int) -> Gfx_Error {
 			gl.Viewport(0, 0, drawable_w, drawable_h)
 			
 			log.infof("Gfx_Window '%s' logical size updated to %dx%d. Viewport set to %dx%d.", window_ptr.title, width, height, drawable_w, drawable_h)
-			return .None
+			return common.Engine_Error.None
 		}
-		return .Invalid_Handle
+		return common.Engine_Error.Invalid_Handle
 	}
-	return .Invalid_Handle
+	return common.Engine_Error.Invalid_Handle
 }
 
 gl_get_window_size :: proc(window: Gfx_Window) -> (w, h: int) {
@@ -255,31 +257,35 @@ gl_clear_screen :: proc(device: Gfx_Device, options: Clear_Options) {
 
 
 // --- Dummy implementations for functions to be filled later ---
+// These are assigned in initialize_sdl_opengl_backend and should match Gfx_Device_Interface signatures.
 
-gl_create_shader_from_source :: proc(device: Gfx_Device, source: string, stage: Shader_Stage) -> (Gfx_Shader, Gfx_Error) {
-	return Gfx_Shader{}, .Not_Implemented
+gl_create_shader_from_source :: proc(device: Gfx_Device, source: string, stage: Shader_Stage) -> (Gfx_Shader, common.Engine_Error) {
+	return Gfx_Shader{}, common.Engine_Error.Not_Implemented
 }
 
-gl_create_shader_from_bytecode :: proc(device: Gfx_Device, bytecode: []u8, stage: Shader_Stage) -> (Gfx_Shader, Gfx_Error) {
-	return Gfx_Shader{}, .Not_Implemented
+gl_create_shader_from_bytecode :: proc(device: Gfx_Device, bytecode: []u8, stage: Shader_Stage) -> (Gfx_Shader, common.Engine_Error) {
+	return Gfx_Shader{}, common.Engine_Error.Not_Implemented
 }
 
 gl_destroy_shader :: proc(shader: Gfx_Shader) {
 }
 
-gl_create_pipeline :: proc(device: Gfx_Device, shaders: []Gfx_Shader /*, other state */) -> (Gfx_Pipeline, Gfx_Error) {
-    return Gfx_Pipeline{}, .Not_Implemented
+gl_create_pipeline :: proc(device: Gfx_Device, shaders: []Gfx_Shader /*, other state */) -> (Gfx_Pipeline, common.Engine_Error) {
+    return Gfx_Pipeline{}, common.Engine_Error.Not_Implemented
 }
 
 gl_destroy_pipeline :: proc(pipeline: Gfx_Pipeline) {
 }
 
-gl_create_buffer :: proc(device: Gfx_Device, type: Buffer_Type, size: int, data: rawptr = nil, is_dynamic: bool = false) -> (Gfx_Buffer, Gfx_Error) {
-	return Gfx_Buffer{}, .Not_Implemented
+// Note: create_buffer, update_buffer etc. are now intended to be the ones from buffer.odin (gl_create_buffer_impl etc.)
+// So these placeholders are not strictly needed if initialize_sdl_opengl_backend points to the correct ones.
+// However, to ensure this file itself is clean of Gfx_Error, we update them.
+gl_create_buffer :: proc(device: Gfx_Device, type: Buffer_Type, size: int, data: rawptr = nil, is_dynamic: bool = false) -> (Gfx_Buffer, common.Engine_Error) {
+	return Gfx_Buffer{}, common.Engine_Error.Not_Implemented 
 }
 
-gl_update_buffer :: proc(buffer: Gfx_Buffer, offset: int, data: rawptr, size: int) -> Gfx_Error {
-	return .Not_Implemented
+gl_update_buffer :: proc(buffer: Gfx_Buffer, offset: int, data: rawptr, size: int) -> common.Engine_Error {
+	return common.Engine_Error.Not_Implemented
 }
 
 gl_destroy_buffer :: proc(buffer: Gfx_Buffer) {
@@ -292,65 +298,54 @@ gl_map_buffer :: proc(buffer: Gfx_Buffer, offset, size: int) -> rawptr {
 gl_unmap_buffer :: proc(buffer: Gfx_Buffer) {
 }
 
-gl_create_texture :: proc(device: Gfx_Device, width, height: int, format: Texture_Format, usage: Texture_Usage, data: rawptr = nil) -> (Gfx_Texture, Gfx_Error) {
-	return Gfx_Texture{}, .Not_Implemented
+gl_create_texture :: proc(device: Gfx_Device, width, height: int, format: Texture_Format, usage: Texture_Usage, data: rawptr = nil) -> (Gfx_Texture, common.Engine_Error) {
+	return Gfx_Texture{}, common.Engine_Error.Not_Implemented
 }
 
-gl_update_texture :: proc(texture: Gfx_Texture, x, y, width, height: int, data: rawptr) -> Gfx_Error {
-	return .Not_Implemented
+gl_update_texture :: proc(texture: Gfx_Texture, x, y, width, height: int, data: rawptr) -> common.Engine_Error {
+	return common.Engine_Error.Not_Implemented
 }
 
 gl_destroy_texture :: proc(texture: Gfx_Texture) {
 }
 
-gl_begin_frame :: proc(device: Gfx_Device) {
+gl_begin_frame :: proc(device: Gfx_Device) { // This proc does not return an error
     // For SDL/OpenGL, this might ensure the primary context is current, or other per-frame setup.
     // However, making context current is often done per window or before specific rendering sequences.
 }
 
-gl_end_frame :: proc(device: Gfx_Device) {
+gl_end_frame :: proc(device: Gfx_Device) { // This proc does not return an error
 }
 
-gl_set_viewport :: proc(device: Gfx_Device, viewport: Viewport) {
+gl_set_viewport :: proc(device: Gfx_Device, viewport: Viewport) { // This proc does not return an error
     // Assumes correct context is current
     gl.Viewport(i32(viewport.position.x), i32(viewport.position.y), i32(viewport.size.x), i32(viewport.size.y))
     gl.DepthRangef(viewport.depth_range[0], viewport.depth_range[1])
 }
 
-gl_set_scissor :: proc(device: Gfx_Device, scissor: Scissor) {
+gl_set_scissor :: proc(device: Gfx_Device, scissor: Scissor) { // This proc does not return an error
     // Assumes correct context is current
     gl.Scissor(scissor.x, scissor.y, scissor.w, scissor.h)
     // User must enable/disable gl.SCISSOR_TEST separately if needed.
 }
 
-gl_set_pipeline :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline) {
+gl_set_pipeline :: proc(device: Gfx_Device, pipeline: Gfx_Pipeline) { // This proc does not return an error
 }
 
-gl_set_vertex_buffer :: proc(device: Gfx_Device, buffer: Gfx_Buffer, binding_index: u32 = 0, offset: u32 = 0) {
+gl_set_vertex_buffer :: proc(device: Gfx_Device, buffer: Gfx_Buffer, binding_index: u32 = 0, offset: u32 = 0) { // This proc does not return an error
 }
 
-gl_set_index_buffer :: proc(device: Gfx_Device, buffer: Gfx_Buffer, offset: u32 = 0) {
+gl_set_index_buffer :: proc(device: Gfx_Device, buffer: Gfx_Buffer, offset: u32 = 0) { // This proc does not return an error
 }
 
-gl_draw :: proc(device: Gfx_Device, vertex_count, instance_count, first_vertex, first_instance: u32) {
+gl_draw :: proc(device: Gfx_Device, vertex_count, instance_count, first_vertex, first_instance: u32) { // This proc does not return an error
 }
 
-gl_draw_indexed :: proc(device: Gfx_Device, index_count, instance_count, first_index, base_vertex, first_instance: u32) {
+gl_draw_indexed :: proc(device: Gfx_Device, index_count, instance_count, first_index, base_vertex, first_instance: u32) { // This proc does not return an error
 }
 
-gl_get_error_string :: proc(error: Gfx_Error) -> string {
-    #partial switch error {
-    case .None: return "No error"
-    case .Initialization_Failed: return "Initialization failed"
-    case .Device_Creation_Failed: return "Device creation failed"
-    case .Window_Creation_Failed: return "Window creation failed"
-    case .Shader_Compilation_Failed: return "Shader compilation failed"
-    case .Buffer_Creation_Failed: return "Buffer creation failed"
-    case .Texture_Creation_Failed: return "Texture creation failed"
-    case .Invalid_Handle: return "Invalid handle"
-    case .Not_Implemented: return "Not implemented"
-    }
-    return "Unknown Gfx_Error"
+gl_get_error_string :: proc(error: common.Engine_Error) -> string {
+    return common.engine_error_to_string(error) // Use the common utility
 }
 
 // Initialize the global gfx_api with OpenGL implementations
@@ -373,22 +368,23 @@ initialize_sdl_opengl_backend :: proc() {
         destroy_pipeline           = gl_destroy_pipeline_impl,           // From shaders.odin
         set_pipeline               = gl_set_pipeline_impl,               // From shaders.odin
 
-
-		create_buffer              = gl_create_buffer, // Placeholder
-		update_buffer              = gl_update_buffer, // Placeholder
-		destroy_buffer             = gl_destroy_buffer, // Placeholder
-        map_buffer                 = gl_map_buffer,     // Placeholder
-        unmap_buffer               = gl_unmap_buffer,   // Placeholder
+		// These should point to the implementations in buffer.odin, texture.odin etc.
+		// Assuming those files also have their function signatures updated to common.Engine_Error
+		create_buffer              = gl_create_buffer_impl,    // From buffer.odin
+		update_buffer              = gl_update_buffer_impl,    // From buffer.odin
+		destroy_buffer             = gl_destroy_buffer_impl,   // From buffer.odin
+        map_buffer                 = gl_map_buffer_impl,       // From buffer.odin
+        unmap_buffer               = gl_unmap_buffer_impl,     // From buffer.odin
 
 		create_texture             = gl_create_texture_impl, // From texture.odin
 		update_texture             = gl_update_texture_impl, // From texture.odin
 		destroy_texture            = gl_destroy_texture_impl, // From texture.odin
 
-		begin_frame                = gl_begin_frame,
-		end_frame                  = gl_end_frame,
-		clear_screen               = gl_clear_screen,
-        set_viewport               = gl_set_viewport,
-        set_scissor                = gl_set_scissor,
+		begin_frame                = gl_begin_frame, // These are local stubs, no error return
+		end_frame                  = gl_end_frame,   // These are local stubs, no error return
+		clear_screen               = gl_clear_screen, // This is local, no error return
+        set_viewport               = gl_set_viewport, // This is local, no error return
+        set_scissor                = gl_set_scissor,  // This is local, no error return
 
 		set_uniform_mat4           = gl_set_uniform_mat4_impl,   // From shaders.odin
 		set_uniform_vec2           = gl_set_uniform_vec2_impl,   // From shaders.odin
@@ -397,17 +393,12 @@ initialize_sdl_opengl_backend :: proc() {
 		set_uniform_int            = gl_set_uniform_int_impl,    // From shaders.odin
 		set_uniform_float          = gl_set_uniform_float_impl,  // From shaders.odin
 		bind_texture_to_unit       = gl_bind_texture_to_unit_impl, // From texture.odin
-
-		create_buffer              = gl_create_buffer_impl,    // From buffer.odin
-		update_buffer              = gl_update_buffer_impl,    // From buffer.odin
-		destroy_buffer             = gl_destroy_buffer_impl,   // From buffer.odin
-		map_buffer                 = gl_map_buffer_impl,       // From buffer.odin
-		unmap_buffer               = gl_unmap_buffer_impl,     // From buffer.odin
+		
 		set_vertex_buffer          = gl_set_vertex_buffer_impl,// From buffer.odin
 		set_index_buffer           = gl_set_index_buffer_impl, // From buffer.odin
 		
-		draw                       = gl_draw_device_impl,          // Implemented in device.odin
-		draw_indexed               = gl_draw_indexed_device_impl,  // Implemented in device.odin
+		draw                       = gl_draw_device_impl,          // Implemented in this file
+		draw_indexed               = gl_draw_indexed_device_impl,  // Implemented in this file
 
 		create_vertex_array      = gl_create_vertex_array_impl, // From vao.odin
 		destroy_vertex_array     = gl_destroy_vertex_array_impl,// From vao.odin
@@ -416,7 +407,7 @@ initialize_sdl_opengl_backend :: proc() {
 		get_texture_width        = gl_get_texture_width_impl,  // From texture.odin
 		get_texture_height       = gl_get_texture_height_impl, // From texture.odin
 
-        get_error_string           = gl_get_error_string,
+        get_error_string           = gl_get_error_string, // Updated local version
 	}
 	log.info("SDL/OpenGL backend initialized and assigned to gfx_api with VAO, buffer, shader, pipeline, texture, uniform, and texture utility functions.")
 }

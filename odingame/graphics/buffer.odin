@@ -1,6 +1,7 @@
 package graphics
 
 import gl "vendor:OpenGL/gl"
+import "../common" // For common.Engine_Error
 import "core:log"
 import "core:mem"
 import "core:unsafe" // For size_of
@@ -19,16 +20,16 @@ Gl_Buffer :: struct {
 
 // --- Implementation of Gfx_Device_Interface buffer functions ---
 
-gl_create_buffer_impl :: proc(device: Gfx_Device, type: Buffer_Type, size: int, data: rawptr = nil, dynamic: bool = false) -> (Gfx_Buffer, Gfx_Error) {
+gl_create_buffer_impl :: proc(device: Gfx_Device, type: Buffer_Type, size: int, data: rawptr = nil, dynamic: bool = false) -> (Gfx_Buffer, common.Engine_Error) {
 	device_ptr, ok_device := device.variant.(^Gl_Device)
 	if !ok_device {
 		log.error("gl_create_buffer: Invalid Gfx_Device type.")
-		return Gfx_Buffer{}, .Invalid_Handle
+		return Gfx_Buffer{}, common.Engine_Error.Invalid_Handle
 	}
 
 	if size <= 0 {
 		log.errorf("gl_create_buffer: Invalid buffer size %d.", size)
-		return Gfx_Buffer{}, .Buffer_Creation_Failed
+		return Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
 	}
 
 	target: gl.GLenum
@@ -41,7 +42,7 @@ gl_create_buffer_impl :: proc(device: Gfx_Device, type: Buffer_Type, size: int, 
 		target = gl.UNIFORM_BUFFER
 	// case: // Other buffer types if needed in future
 	// 	log.errorf("Unsupported buffer type: %v", type)
-	// 	return Gfx_Buffer{}, .Buffer_Creation_Failed
+	// 	return Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
 	}
 
 	usage: gl.GLenum = gl.STATIC_DRAW
@@ -53,7 +54,7 @@ gl_create_buffer_impl :: proc(device: Gfx_Device, type: Buffer_Type, size: int, 
 	gl.GenBuffers(1, &buf_id)
 	if buf_id == 0 {
 		log.errorf("glGenBuffers failed for type %v.", type)
-		return Gfx_Buffer{}, .Buffer_Creation_Failed
+		return Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
 	}
 
 	gl.BindBuffer(target, buf_id)
@@ -69,25 +70,25 @@ gl_create_buffer_impl :: proc(device: Gfx_Device, type: Buffer_Type, size: int, 
 	gl_buffer_ptr.main_allocator = device_ptr.main_allocator
 
 	log.infof("OpenGL Buffer ID %v (type %v, size %v, dynamic %v) created.", buf_id, type, size, dynamic)
-	return Gfx_Buffer{gl_buffer_ptr}, .None
+	return Gfx_Buffer{gl_buffer_ptr}, common.Engine_Error.None
 }
 
-gl_update_buffer_impl :: proc(buffer: Gfx_Buffer, offset: int, data: rawptr, size: int) -> Gfx_Error {
+gl_update_buffer_impl :: proc(buffer: Gfx_Buffer, offset: int, data: rawptr, size: int) -> common.Engine_Error {
 	buf_ptr, ok := buffer.variant.(^Gl_Buffer)
 	if !ok || buf_ptr.id == 0 {
 		log.error("gl_update_buffer: Invalid or uninitialized Gfx_Buffer.")
-		return .Invalid_Handle
+		return common.Engine_Error.Invalid_Handle
 	}
 
 	if data == nil {
 		log.error("gl_update_buffer: Data pointer is nil.")
-		return .Buffer_Creation_Failed // Or Invalid_Argument
+		return common.Engine_Error.Buffer_Creation_Failed // Or Invalid_Argument
 	}
 
 	if offset < 0 || size <= 0 || (offset + size) > buf_ptr.size {
 		log.errorf("gl_update_buffer: Invalid update region (offset:%d, size:%d) for buffer size %d.",
 			offset, size, buf_ptr.size)
-		return .Buffer_Creation_Failed // Or out_of_bounds error
+		return common.Engine_Error.Buffer_Creation_Failed // Or out_of_bounds error
 	}
 
 	gl.BindBuffer(buf_ptr.gl_target, buf_ptr.id)
@@ -95,7 +96,7 @@ gl_update_buffer_impl :: proc(buffer: Gfx_Buffer, offset: int, data: rawptr, siz
 	gl.BindBuffer(buf_ptr.gl_target, 0) // Unbind
 
 	// log.debugf("OpenGL Buffer ID %v updated (offset %v, size %v).", buf_ptr.id, offset, size) // Can be spammy
-	return .None
+	return common.Engine_Error.None
 }
 
 gl_destroy_buffer_impl :: proc(buffer: Gfx_Buffer) {

@@ -1,6 +1,7 @@
 package metal
 
 import "../gfx_interface"
+import "../../common" // For common.Engine_Error
 import "core:log"
 
 // --- Gfx_Device_Interface Render Pass and Framebuffer Stubs ---
@@ -12,14 +13,14 @@ mtl_create_render_pass_wrapper :: proc(
     device: gfx_interface.Gfx_Device,
     color_attachment: gfx_interface.Texture_Descriptor,
     depth_stencil_attachment: Maybe(gfx_interface.Texture_Descriptor),
-) -> (gfx_interface.Gfx_Render_Pass, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Render_Pass, common.Engine_Error) {
     log.warn("Metal: create_render_pass_wrapper not implemented.")
     // Real Metal:
     // 1. Create a MTLRenderPassDescriptor
     // 2. Configure color attachments (MTLRenderPassColorAttachmentDescriptor)
     // 3. Configure depth/stencil attachments if provided
     // 4. Store configuration in Mtl_Render_Pass_Internal
-    return gfx_interface.Gfx_Render_Pass{}, .Not_Implemented
+    return gfx_interface.Gfx_Render_Pass{}, common.Engine_Error.Not_Implemented
 }
 
 mtl_begin_render_pass_wrapper :: proc(
@@ -28,7 +29,7 @@ mtl_begin_render_pass_wrapper :: proc(
     clear_color: Maybe(gfx_interface.Color) = nil,
     clear_depth: f32 = 1.0,
     clear_stencil: u32 = 0,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     log.warn("Metal: begin_render_pass_wrapper not implemented.")
     // Real Metal:
     // 1. Get the current drawable from the swapchain
@@ -36,16 +37,16 @@ mtl_begin_render_pass_wrapper :: proc(
     // 3. Configure clear colors, load/store actions
     // 4. Create a MTLRenderCommandEncoder from the command buffer
     // 5. Store the encoder in the device state
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }
 
-mtl_end_render_pass_wrapper :: proc(device: gfx_interface.Gfx_Device) -> gfx_interface.Gfx_Error {
+mtl_end_render_pass_wrapper :: proc(device: gfx_interface.Gfx_Device) -> common.Engine_Error {
     log.warn("Metal: end_render_pass_wrapper not implemented.")
     // Real Metal:
     // 1. Call endEncoding on the current render command encoder
     // 2. Present the drawable if it's the main framebuffer
     // 3. Commit the command buffer
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }
 
 // --- Framebuffer Management ---
@@ -54,13 +55,13 @@ mtl_create_framebuffer_wrapper :: proc(
     device: gfx_interface.Gfx_Device,
     color_attachments: []gfx_interface.Gfx_Texture,
     depth_stencil_attachment: Maybe(gfx_interface.Gfx_Texture),
-) -> (gfx_interface.Gfx_Framebuffer, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Framebuffer, common.Engine_Error) {
     log.warn("Metal: create_framebuffer_wrapper not implemented.")
     // Real Metal:
     // 1. Create a MTLTexture for each attachment if needed
     // 2. Store the textures in Mtl_Framebuffer_Internal
     // 3. The actual MTLRenderPassDescriptor will be created at render time
-    return gfx_interface.Gfx_Framebuffer{}, .Not_Implemented
+    return gfx_interface.Gfx_Framebuffer{}, common.Engine_Error.Not_Implemented
 }
 
 mtl_destroy_framebuffer_wrapper :: proc(framebuffer: gfx_interface.Gfx_Framebuffer) {

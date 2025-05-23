@@ -7,7 +7,7 @@ import "core:strings"
 import "../common"
 import "./opengl"
 import "./vulkan"
-import "./directx"
+import "./directx11" // Changed from "./directx"
 import "./metal"
 
 // Backend types supported by the engine
@@ -15,7 +15,7 @@ Backend_Type :: enum {
     Auto,    // Automatically select the best backend for the current platform
     OpenGL,  // OpenGL backend
     Vulkan,  // Vulkan backend
-    DirectX, // DirectX backend (Windows only)
+    DirectX, // DirectX backend (Windows only) - Now specifically DX11
     Metal,   // Metal backend (Apple platforms only)
 }
 
@@ -87,11 +87,13 @@ get_best_backend_for_platform :: proc() -> Backend_Type {
 initialize_backend :: proc(backend_type: Backend_Type, debug_mode: bool) -> common.Engine_Error {
     switch backend_type {
     case .OpenGL:
-        return opengl.initialize_sdl_opengl_backend()
+        return opengl.initialize_sdl_opengl_backend(debug_mode)
     case .Vulkan:
         return vulkan.initialize_sdl_vulkan_backend(debug_mode)
     case .DirectX:
-        return directx.initialize_sdl_directx_backend(debug_mode)
+        // Changed to directx11 and assuming initialize_d3d11_backend doesn't take debug_mode for now.
+        // If debug_mode is needed for DX11, its initialize function signature must be updated.
+        return directx11.initialize_d3d11_backend() 
     case .Metal:
         return metal.initialize_sdl_metal_backend(debug_mode)
     case .Auto:

@@ -1,9 +1,10 @@
 package vulkan
 
 import vk "vendor:vulkan"
+import "../../common" // For common.Engine_Error
 import "core:log"
 import "core:mem"
-import "../gfx_interface"
+import "../gfx_interface" // For Gfx_Error enum members that might be used in comments or logic
 
 // --- Render Pass Management ---
 
@@ -11,7 +12,7 @@ import "../gfx_interface"
 vk_create_render_pass_internal :: proc(
     logical_device: vk.Device,
     swapchain_format: vk.Format,
-) -> (vk.RenderPass, gfx_interface.Gfx_Error) {
+) -> (vk.RenderPass, common.Engine_Error) { // Changed Gfx_Error to common.Engine_Error
     // Color attachment
     color_attachment := vk.AttachmentDescription{
         format = swapchain_format,
@@ -61,10 +62,11 @@ vk_create_render_pass_internal :: proc(
     result := vk.CreateRenderPass(logical_device, &render_pass_info, nil, &render_pass)
     if result != .SUCCESS {
         log.errorf("Failed to create render pass: %v", result)
-        return 0, .Render_Pass_Creation_Failed
+        // Assuming .Render_Pass_Creation_Failed maps to a relevant common.Engine_Error
+        return 0, common.Engine_Error.Pipeline_Creation_Failed // Or a more specific Render_Pass_Creation_Failed if added
     }
 
-    return render_pass, .None
+    return render_pass, common.Engine_Error.None
 }
 
 // vk_destroy_render_pass_internal destroys a Vulkan render pass
@@ -111,7 +113,7 @@ vk_create_framebuffer_internal :: proc(
     render_pass: vk.RenderPass,
     attachments: []vk.ImageView,
     width, height: u32,
-) -> (vk.Framebuffer, gfx_interface.Gfx_Error) {
+) -> (vk.Framebuffer, common.Engine_Error) { // Changed Gfx_Error to common.Engine_Error
     framebuffer_info := vk.FramebufferCreateInfo{
         sType = .FRAMEBUFFER_CREATE_INFO,
         renderPass = render_pass,
@@ -126,10 +128,10 @@ vk_create_framebuffer_internal :: proc(
     result := vk.CreateFramebuffer(logical_device, &framebuffer_info, nil, &framebuffer)
     if result != .SUCCESS {
         log.errorf("Failed to create framebuffer: %v", result)
-        return 0, .Framebuffer_Creation_Failed
+        return 0, common.Engine_Error.Framebuffer_Creation_Failed
     }
 
-    return framebuffer, .None
+    return framebuffer, common.Engine_Error.None
 }
 
 // vk_destroy_framebuffer_internal destroys a Vulkan framebuffer

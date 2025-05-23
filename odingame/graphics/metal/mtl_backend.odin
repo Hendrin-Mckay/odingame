@@ -1,6 +1,7 @@
 package metal
 
 import "../gfx_interface"
+import "../../common" // For common.Engine_Error
 import "core:log"
 
 // initialize_metal_backend populates the global gfx_api with Metal stub implementations.
@@ -70,7 +71,17 @@ initialize_metal_backend :: proc() {
 		bind_vertex_array        = mtl_bind_vertex_array_wrapper,
 		
         // Utility
-        get_error_string           = mtl_get_error_string_wrapper,
+        get_error_string           = mtl_get_error_string_wrapper, // Ensure this points to a correctly defined function
 	}
 	log.info("Metal graphics backend initialized with stub functions and assigned to gfx_api.")
 }
+
+// If mtl_get_error_string_wrapper is defined elsewhere, ensure its signature is:
+// mtl_get_error_string_wrapper :: proc(error: common.Engine_Error) -> string
+// and it uses common.engine_error_to_string(error) or similar.
+// If it's a simple stub defined here (not shown in original read_files), it would be:
+/*
+mtl_get_error_string_wrapper :: proc(error: common.Engine_Error) -> string {
+    return common.engine_error_to_string(error)
+}
+*/

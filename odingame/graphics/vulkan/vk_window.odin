@@ -7,6 +7,7 @@ import "core:fmt"
 import "core:mem"
 import "core:math"
 import "../gfx_interface"
+import "../../common" // For common.Engine_Error
 
 // --- Swapchain Helpers ---
 
@@ -82,7 +83,7 @@ vk_create_swapchain_internal_logic :: proc(
 	vk_dev_internal: ^Vk_Device_Internal, 
 	vk_win_internal: ^Vk_Window_Internal, // The window struct to update
 	sdl_window_handle: ^sdl.Window, // Needed for current drawable size if recreating
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
 
 	physical_device := vk_dev_internal.physical_device_info.physical_device
 	logical_device  := vk_dev_internal.logical_device
@@ -95,7 +96,7 @@ vk_create_swapchain_internal_logic :: proc(
 	swap_support, ok_ss := query_swapchain_support(physical_device, surface, allocator)
 	if !ok_ss {
 		log.error("Failed to query swapchain support details during swapchain (re)creation.")
-		return .Device_Creation_Failed // Or a more specific swapchain error
+		return common.Engine_Error.Device_Creation_Failed // Or a more specific swapchain error
 	}
 	// Ensure these slices are freed as they are allocated by query_swapchain_support with `allocator`.
 	defer delete(swap_support.formats)
@@ -104,7 +105,7 @@ vk_create_swapchain_internal_logic :: proc(
 
 	if len(swap_support.formats) == 0 || len(swap_support.present_modes) == 0 {
 		log.error("No formats or present modes available for swapchain creation.")
-		return .Device_Creation_Failed
+		return common.Engine_Error.Device_Creation_Failed
 	}
 
 	surface_format := vk_choose_swapchain_surface_format_internal(swap_support.formats)
@@ -178,7 +179,7 @@ vk_create_swapchain_internal_logic :: proc(
 		log.errorf("vkCreateSwapchainKHR failed. Result: %v (%d)", result, int(result))
 		// If oldSwapchain was provided, it's still valid. Don't nullify vk_win_internal.swapchain yet.
 		// The caller might try to continue with the old one if recreation fails.
-		return .Device_Creation_Failed // Or a more specific error
+		return common.Engine_Error.Device_Creation_Failed // Or a more specific error
 	}
 	log.info("Vulkan Swapchain (re)created successfully.")
 
@@ -210,7 +211,7 @@ vk_create_swapchain_internal_logic :: proc(
 			vk.DestroySwapchainKHR(logical_device, vk_win_internal.swapchain, p_vk_allocator)
 			vk_win_internal.swapchain = vk.NULL_HANDLE
 			// Also need to clean up swapchain_images and swapchain_image_views if they were populated
-			return .Device_Creation_Failed 
+			return common.Engine_Error.Device_Creation_Failed 
 		}
 		vk_win_internal.render_pass = rp
 		log.infof("Window render pass created: %p", vk_win_internal.render_pass)
@@ -225,7 +226,7 @@ vk_create_swapchain_internal_logic :: proc(
 		// This is a critical error. Cleanup the new swapchain.
 		vk.DestroySwapchainKHR(logical_device, vk_win_internal.swapchain, p_vk_allocator)
 		vk_win_internal.swapchain = vk.NULL_HANDLE
-		return .Device_Creation_Failed
+		return common.Engine_Error.Device_Creation_Failed
 	}
 	// Allocate/reallocate slice for images
 	// Ensure old image data is cleared/deleted if reallocating
@@ -269,7 +270,7 @@ vk_create_swapchain_internal_logic :: proc(
 			delete(vk_win_internal.swapchain_images)
 			vk.DestroySwapchainKHR(logical_device, vk_win_internal.swapchain, p_vk_allocator)
 			vk_win_internal.swapchain = vk.NULL_HANDLE
-			return .Device_Creation_Failed
+			return common.Engine_Error.Device_Creation_Failed
 		}
 	}
 	log.infof("Created %d image views for swapchain images.", sc_image_count)
@@ -290,7 +291,7 @@ vk_create_swapchain_internal_logic :: proc(
 		vk.DestroySwapchainKHR(logical_device, vk_win_internal.swapchain, p_vk_allocator)
 		vk_win_internal.swapchain = vk.NULL_HANDLE
 		// Render pass is not destroyed here as it's window-owned, assumed to be valid if we got this far.
-		return .Device_Creation_Failed
+		return common.Engine_Error.Device_Creation_Failed
 	}
 	
 	// Initialize images_in_flight fence array (size of swapchain images)
@@ -325,14 +326,14 @@ vk_destroy_framebuffers_internal :: proc(logical_device: vk.Device, vk_win_inter
 }
 
 // vk_create_framebuffers_internal creates framebuffers for the swapchain image views.
-vk_create_framebuffers_internal :: proc(logical_device: vk.Device, vk_win_internal: ^Vk_Window_Internal, p_vk_allocator: ^vk.AllocationCallbacks) -> gfx_interface.Gfx_Error {
+vk_create_framebuffers_internal :: proc(logical_device: vk.Device, vk_win_internal: ^Vk_Window_Internal, p_vk_allocator: ^vk.AllocationCallbacks) -> common.Engine_Error {
 	if vk_win_internal.render_pass == vk.NULL_HANDLE {
 		log.error("Cannot create framebuffers: Window render pass is NULL.")
-		return .Invalid_Handle // Or .Not_Ready
+		return common.Engine_Error.Invalid_Handle // Or .Not_Ready
 	}
 	if len(vk_win_internal.swapchain_image_views) == 0 {
 		log.error("Cannot create framebuffers: No swapchain image views available.")
-		return .Not_Ready 
+		return common.Engine_Error.Not_Ready 
 	}
 
 	num_images := len(vk_win_internal.swapchain_image_views)
@@ -358,7 +359,7 @@ vk_create_framebuffers_internal :: proc(logical_device: vk.Device, vk_win_intern
 			}
 			delete(vk_win_internal.framebuffers)
 			vk_win_internal.framebuffers = nil
-			return .Device_Creation_Failed
+			return common.Engine_Error.Device_Creation_Failed
 		}
 	}
 	log.infof("Created %d framebuffers successfully.", num_images)
@@ -415,12 +416,12 @@ vk_create_window_wrapper :: proc(
 	device: gfx_interface.Gfx_Device, 
 	title: string, 
 	width, height: int,
-) -> (gfx_interface.Gfx_Window, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Window, common.Engine_Error) {
 	
 	vk_dev_internal, ok_dev := device.variant.(Vk_Device_Variant)
 	if !ok_dev || vk_dev_internal == nil {
 		log.error("vk_create_window_wrapper: Invalid Gfx_Device (not Vulkan or nil variant).")
-		return gfx_interface.Gfx_Window{}, .Invalid_Handle
+		return gfx_interface.Gfx_Window{}, common.Engine_Error.Invalid_Handle
 	}
 	
 	allocator := vk_dev_internal.allocator // Use device's allocator for the window struct
@@ -434,7 +435,7 @@ vk_create_window_wrapper :: proc(
 	sdl_win := sdl.CreateWindow(title, sdl.WINDOWPOS_CENTERED, sdl.WINDOWPOS_CENTERED, width, height, sdl_window_flags)
 	if sdl_win == nil {
 		log.errorf("SDL_CreateWindow failed (Vulkan window): %s", sdl.GetError())
-		return gfx_interface.Gfx_Window{}, .Window_Creation_Failed
+		return gfx_interface.Gfx_Window{}, common.Engine_Error.Window_Creation_Failed
 	}
 	log.infof("SDL Window created for Vulkan (title: %s, %dx%d)", title, width, height)
 
@@ -445,7 +446,7 @@ vk_create_window_wrapper :: proc(
 		err_msg := sdl.GetError()
 		log.errorf("SDL_Vulkan_CreateSurface failed: %s", err_msg)
 		sdl.DestroyWindow(sdl_win)
-		return gfx_interface.Gfx_Window{}, .Window_Creation_Failed // Or a more specific Surface_Creation_Failed
+		return gfx_interface.Gfx_Window{}, common.Engine_Error.Window_Creation_Failed // Or a more specific Surface_Creation_Failed
 	}
 	log.infof("Vulkan SurfaceKHR created: %p", surface_handle)
 
@@ -494,7 +495,7 @@ vk_create_window_wrapper :: proc(
 			// For now, consider this a fatal error for window creation.
 			// A full cleanup path would be needed in production.
 			vk_destroy_window_internal_resources(vk_win_internal) // Helper to destroy all vk_win_internal contents
-			return gfx_interface.Gfx_Window{}, .Initialization_Failed
+			return gfx_interface.Gfx_Window{}, common.Engine_Error.Graphics_Initialization_Failed
 		}
 	}
 	log.infof("Created %d sets of frame synchronization primitives.", MAX_FRAMES_IN_FLIGHT)
@@ -510,7 +511,7 @@ vk_create_window_wrapper :: proc(
 	if cmd_buf_res != .SUCCESS {
 		log.errorf("Failed to allocate command buffers: %v", cmd_buf_res)
 		vk_destroy_window_internal_resources(vk_win_internal)
-		return gfx_interface.Gfx_Window{}, .Initialization_Failed
+		return gfx_interface.Gfx_Window{}, common.Engine_Error.Graphics_Initialization_Failed
 	}
 	log.infof("Allocated %d primary command buffers.", MAX_FRAMES_IN_FLIGHT)
 	
@@ -615,7 +616,7 @@ vk_destroy_window_wrapper :: proc(window: gfx_interface.Gfx_Window) {
 
 // --- Stubbed/Simplified Window Interface Functions for Vulkan ---
 
-vk_present_window_wrapper :: proc(window: gfx_interface.Gfx_Window) -> gfx_interface.Gfx_Error {
+vk_present_window_wrapper :: proc(window: gfx_interface.Gfx_Window) -> common.Engine_Error {
 	// TODO: Full Vulkan presentation logic:
 	// 1. Acquire next available swapchain image (vkAcquireNextImageKHR) - needs semaphore
 	// 2. Submit command buffer to render to that image (waits on acquire semaphore, signals render finished semaphore)
@@ -624,7 +625,7 @@ vk_present_window_wrapper :: proc(window: gfx_interface.Gfx_Window) -> gfx_inter
 	// For initial setup, this can be a placeholder.
 	
 	vk_win, ok := window.variant.(Vk_Window_Variant)
-	if !ok || vk_win == nil { return .Invalid_Handle }
+	if !ok || vk_win == nil { return common.Engine_Error.Invalid_Handle }
 	
 	if vk_win.recreating_swapchain {
 		log.debug("Skipping present for window pending swapchain recreation.")
@@ -640,11 +641,11 @@ vk_present_window_wrapper :: proc(window: gfx_interface.Gfx_Window) -> gfx_inter
 	return .None 
 }
 
-vk_resize_window_wrapper :: proc(window: gfx_interface.Gfx_Window, width, height: int) -> gfx_interface.Gfx_Error {
+vk_resize_window_wrapper :: proc(window: gfx_interface.Gfx_Window, width, height: int) -> common.Engine_Error {
 	// For Vulkan, resizing a window typically means the swapchain becomes out-of-date
 	// and needs to be recreated.
 	vk_win, ok := window.variant.(Vk_Window_Variant)
-	if !ok || vk_win == nil { return .Invalid_Handle }
+	if !ok || vk_win == nil { return common.Engine_Error.Invalid_Handle }
 
 	log.infof("Vulkan window resize requested to %dx%d. Marking for swapchain recreation.", width, height)
 	// SDL window itself might be resized by OS events. This function is for programmatic resize
@@ -668,7 +669,7 @@ vk_resize_window_wrapper :: proc(window: gfx_interface.Gfx_Window, width, height
 	// 	return err
 	// }
 	// log.info("Swapchain recreated due to resize.")
-	return .Not_Implemented // Proper resize handling is complex.
+	return common.Engine_Error.Not_Implemented // Proper resize handling is complex.
 }
 
 vk_get_window_size_wrapper :: proc(window: gfx_interface.Gfx_Window) -> (w, h: int) {

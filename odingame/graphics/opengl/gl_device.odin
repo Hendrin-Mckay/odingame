@@ -126,7 +126,7 @@ destroy_window :: proc(window: gfx_interface.Gfx_Window) {
     }
 }
 
-present_window :: proc(window: gfx_interface.Gfx_Window) -> gfx_interface.Gfx_Error {
+present_window :: proc(window: gfx_interface.Gfx_Window) -> common.Engine_Error {
     if window_ptr, ok := window.variant.(^Window); ok {
         sdl.GL_SwapWindow(window_ptr.sdl_window)
         return .None
@@ -134,7 +134,7 @@ present_window :: proc(window: gfx_interface.Gfx_Window) -> gfx_interface.Gfx_Er
     return .Invalid_Handle
 }
 
-resize_window :: proc(window: gfx_interface.Gfx_Window, width, height: int) -> gfx_interface.Gfx_Error {
+resize_window :: proc(window: gfx_interface.Gfx_Window, width, height: int) -> common.Engine_Error {
     if window_ptr, ok := window.variant.(^Window); ok {
         sdl.SetWindowSize(window_ptr.sdl_window, i32(width), i32(height))
         window_ptr.width = width
@@ -172,19 +172,19 @@ set_window_title :: proc(window: gfx_interface.Gfx_Window, title: string) -> com
 }
 
 // --- Frame Management ---
-begin_frame :: proc(device: gfx_interface.Gfx_Device) -> gfx_interface.Gfx_Error {
+begin_frame :: proc(device: gfx_interface.Gfx_Device) -> common.Engine_Error {
     // Clear the default framebuffer
     gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
     return .None
 }
 
-end_frame :: proc(device: gfx_interface.Gfx_Device) -> gfx_interface.Gfx_Error {
+end_frame :: proc(device: gfx_interface.Gfx_Device) -> common.Engine_Error {
     // Flush any pending OpenGL commands
     gl.Flush()
     return .None
 }
 
-clear_screen :: proc(device: gfx_interface.Gfx_Device, options: gfx_interface.Clear_Options) -> gfx_interface.Gfx_Error {
+clear_screen :: proc(device: gfx_interface.Gfx_Device, options: gfx_interface.Clear_Options) -> common.Engine_Error {
     if options.clear_color {
         gl.ClearColor(
             options.color[0], 
@@ -208,7 +208,7 @@ clear_screen :: proc(device: gfx_interface.Gfx_Device, options: gfx_interface.Cl
     return .None
 }
 
-set_viewport :: proc(device: gfx_interface.Gfx_Device, viewport: gfx_interface.Viewport) -> gfx_interface.Gfx_Error {
+set_viewport :: proc(device: gfx_interface.Gfx_Device, viewport: gfx_interface.Viewport) -> common.Engine_Error {
     gl.Viewport(
         i32(viewport.x), 
         i32(viewport.y), 
@@ -219,7 +219,7 @@ set_viewport :: proc(device: gfx_interface.Gfx_Device, viewport: gfx_interface.V
     return .None
 }
 
-set_scissor :: proc(device: gfx_interface.Gfx_Device, scissor: gfx_interface.Scissor) -> gfx_interface.Gfx_Error {
+set_scissor :: proc(device: gfx_interface.Gfx_Device, scissor: gfx_interface.Scissor) -> common.Engine_Error {
     gl.Scissor(
         scissor.x, 
         scissor.y, 
@@ -230,17 +230,6 @@ set_scissor :: proc(device: gfx_interface.Gfx_Device, scissor: gfx_interface.Sci
 }
 
 // --- Error Handling ---
-get_error_string_impl :: proc(error: gfx_interface.Gfx_Error) -> string {
-    #partial switch error {
-    case .None: return "No error"
-    case .Initialization_Failed: return "Initialization failed"
-    case .Device_Creation_Failed: return "Device creation failed"
-    case .Window_Creation_Failed: return "Window creation failed"
-    case .Shader_Compilation_Failed: return "Shader compilation failed"
-    case .Buffer_Creation_Failed: return "Buffer creation failed"
-    case .Texture_Creation_Failed: return "Texture creation failed"
-    case .Invalid_Handle: return "Invalid handle"
-    case .Not_Implemented: return "Not implemented"
-    }
-    return "Unknown Gfx_Error"
+get_error_string_impl :: proc(error: common.Engine_Error) -> string {
+    return common.engine_error_to_string(error)
 }

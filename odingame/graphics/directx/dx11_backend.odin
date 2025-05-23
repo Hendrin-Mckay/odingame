@@ -4,9 +4,10 @@ import "../gfx_interface"
 import "core:log"
 import "core:mem"
 import "core:strings"
+import "../../common" // For common.Engine_Error
 
 // Initialize the DirectX 11 backend and set up the global graphics API
-initialize_d3d11_backend :: proc() -> gfx_interface.Gfx_Error {
+initialize_d3d11_backend :: proc() -> common.Engine_Error {
     // Initialize the global gfx_api with DirectX 11 implementations
     gfx_interface.gfx_api = gfx_interface.Gfx_Device_Interface{
         // Device and window management
@@ -89,7 +90,7 @@ initialize_d3d11_backend :: proc() -> gfx_interface.Gfx_Error {
 }
 
 // Get a string representation of the last DirectX 11 error
-get_error_string_impl :: proc() -> string {
+get_error_string_impl :: proc(error: common.Engine_Error) -> string {
     // In a real implementation, this would use DXGetErrorDescription or similar
-    return "DirectX 11 error (not implemented)"
+	 return common.engine_error_to_string(error)
 }

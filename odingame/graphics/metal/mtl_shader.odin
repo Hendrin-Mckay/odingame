@@ -1,11 +1,12 @@
 package metal
 
 import "../gfx_interface"
+import "../../common" // For common.Engine_Error
 import "core:log"
 
 // --- Gfx_Device_Interface Shader and Pipeline Management Stubs ---
 
-mtl_create_shader_from_source_wrapper :: proc(device: gfx_interface.Gfx_Device, source: string, stage: gfx_interface.Shader_Stage) -> (gfx_interface.Gfx_Shader, gfx_interface.Gfx_Error) {
+mtl_create_shader_from_source_wrapper :: proc(device: gfx_interface.Gfx_Device, source: string, stage: gfx_interface.Shader_Stage) -> (gfx_interface.Gfx_Shader, common.Engine_Error) {
 	log.warn("Metal: create_shader_from_source_wrapper not implemented.")
 	// Real Metal:
 	// 1. Get id<MTLDevice> from Gfx_Device.
@@ -13,17 +14,17 @@ mtl_create_shader_from_source_wrapper :: proc(device: gfx_interface.Gfx_Device, 
 	// 3. Get id<MTLFunction> from library: library.newFunction(name: "vertex_main") or "fragment_main".
 	//    The function name needs to be known or passed.
 	// 4. Populate Mtl_Shader_Internal.
-	return gfx_interface.Gfx_Shader{}, .Not_Implemented
+	return gfx_interface.Gfx_Shader{}, common.Engine_Error.Not_Implemented
 }
 
-mtl_create_shader_from_bytecode_wrapper :: proc(device: gfx_interface.Gfx_Device, bytecode: []u8, stage: gfx_interface.Shader_Stage) -> (gfx_interface.Gfx_Shader, gfx_interface.Gfx_Error) {
+mtl_create_shader_from_bytecode_wrapper :: proc(device: gfx_interface.Gfx_Device, bytecode: []u8, stage: gfx_interface.Shader_Stage) -> (gfx_interface.Gfx_Shader, common.Engine_Error) {
 	log.warn("Metal: create_shader_from_bytecode_wrapper not implemented.")
 	// Real Metal:
 	// 1. Get id<MTLDevice>.
 	// 2. Create id<MTLLibrary> from precompiled .metallib data: device.newLibrary(data: dispatch_data_create(bytecode...)).
 	// 3. Get id<MTLFunction> from library.
 	// 4. Populate Mtl_Shader_Internal.
-	return gfx_interface.Gfx_Shader{}, .Not_Implemented
+	return gfx_interface.Gfx_Shader{}, common.Engine_Error.Not_Implemented
 }
 
 mtl_destroy_shader_wrapper :: proc(shader: gfx_interface.Gfx_Shader) {
@@ -36,7 +37,7 @@ mtl_destroy_shader_wrapper :: proc(shader: gfx_interface.Gfx_Shader) {
 	}
 }
 
-mtl_create_pipeline_wrapper :: proc(device: gfx_interface.Gfx_Device, shaders: []gfx_interface.Gfx_Shader) -> (gfx_interface.Gfx_Pipeline, gfx_interface.Gfx_Error) {
+mtl_create_pipeline_wrapper :: proc(device: gfx_interface.Gfx_Device, shaders: []gfx_interface.Gfx_Shader) -> (gfx_interface.Gfx_Pipeline, common.Engine_Error) {
 	log.warn("Metal: create_pipeline_wrapper not implemented.")
 	// Real Metal:
 	// 1. Get id<MTLDevice>.
@@ -46,7 +47,7 @@ mtl_create_pipeline_wrapper :: proc(device: gfx_interface.Gfx_Device, shaders: [
 	// 5. Set vertexDescriptor (from Gfx_Vertex_Array or created here).
 	// 6. device.newRenderPipelineState(descriptor: desc).
 	// 7. Populate Mtl_Pipeline_Internal.
-	return gfx_interface.Gfx_Pipeline{}, .Not_Implemented
+	return gfx_interface.Gfx_Pipeline{}, common.Engine_Error.Not_Implemented
 }
 
 mtl_destroy_pipeline_wrapper :: proc(pipeline: gfx_interface.Gfx_Pipeline) {
@@ -71,27 +72,27 @@ mtl_set_pipeline_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx
 // The current Gfx_Device_Interface for uniforms is more like GL's individual uniform setting.
 // This would map to setBytes or require a system for managing small, dynamic constant data.
 
-mtl_set_uniform_mat4_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, mat: matrix[4,4]f32) -> gfx_interface.Gfx_Error {
+mtl_set_uniform_mat4_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, mat: matrix[4,4]f32) -> common.Engine_Error {
     log.warn("Metal: set_uniform_mat4_wrapper not implemented (use setVertexBytes/setFragmentBytes or MTLBuffers).")
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }
-mtl_set_uniform_vec2_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, vec: [2]f32) -> gfx_interface.Gfx_Error {
+mtl_set_uniform_vec2_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, vec: [2]f32) -> common.Engine_Error {
     log.warn("Metal: set_uniform_vec2_wrapper not implemented (use setVertexBytes/setFragmentBytes or MTLBuffers).")
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }
-mtl_set_uniform_vec3_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, vec: [3]f32) -> gfx_interface.Gfx_Error {
+mtl_set_uniform_vec3_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, vec: [3]f32) -> common.Engine_Error {
     log.warn("Metal: set_uniform_vec3_wrapper not implemented (use setVertexBytes/setFragmentBytes or MTLBuffers).")
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }
-mtl_set_uniform_vec4_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, vec: [4]f32) -> gfx_interface.Gfx_Error {
+mtl_set_uniform_vec4_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, vec: [4]f32) -> common.Engine_Error {
     log.warn("Metal: set_uniform_vec4_wrapper not implemented (use setVertexBytes/setFragmentBytes or MTLBuffers).")
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }
-mtl_set_uniform_int_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, val: i32) -> gfx_interface.Gfx_Error {
+mtl_set_uniform_int_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, val: i32) -> common.Engine_Error {
     log.warn("Metal: set_uniform_int_wrapper not implemented (use setVertexBytes/setFragmentBytes or MTLBuffers).")
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }
-mtl_set_uniform_float_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, val: f32) -> gfx_interface.Gfx_Error {
+mtl_set_uniform_float_wrapper :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, val: f32) -> common.Engine_Error {
     log.warn("Metal: set_uniform_float_wrapper not implemented (use setVertexBytes/setFragmentBytes or MTLBuffers).")
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }

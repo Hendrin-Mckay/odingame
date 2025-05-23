@@ -1,6 +1,7 @@
 package metal
 
 import "../gfx_interface"
+import "../../common" // For common.Engine_Error
 import "core:log"
 
 // --- Gfx_Device_Interface Vertex Array (Vertex Descriptor) Stubs ---
@@ -10,7 +11,7 @@ mtl_create_vertex_array_wrapper :: proc(
 	vertex_buffer_layouts: []gfx_interface.Vertex_Buffer_Layout, 
 	vertex_buffers: []gfx_interface.Gfx_Buffer,
 	index_buffer: gfx_interface.Gfx_Buffer,
-) -> (gfx_interface.Gfx_Vertex_Array, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Vertex_Array, common.Engine_Error) {
 	log.warn("Metal: create_vertex_array_wrapper not implemented.")
 	// Real Metal: This would primarily involve creating and configuring an MTLVertexDescriptor object.
 	// The descriptor would be populated based on Vertex_Buffer_Layout and Vertex_Attribute.
@@ -22,7 +23,7 @@ mtl_create_vertex_array_wrapper :: proc(
 	//     - MTLVertexDescriptor.attributes[location].bufferIndex = attr.buffer_binding (maps to VBO slot)
 	// The Gfx_Vertex_Array for Metal would store this configured MTLVertexDescriptor.
 	// The actual MTLBuffer objects for vertices/indices are bound separately during render encoding.
-	return gfx_interface.Gfx_Vertex_Array{}, .Not_Implemented
+	return gfx_interface.Gfx_Vertex_Array{}, common.Engine_Error.Not_Implemented
 }
 
 mtl_destroy_vertex_array_wrapper :: proc(vao: gfx_interface.Gfx_Vertex_Array) {

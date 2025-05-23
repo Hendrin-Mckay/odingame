@@ -2,6 +2,7 @@ package graphics
 
 import gl "vendor:OpenGL/gl"
 import "vendor:stb/image"
+import "../common" // For common.Engine_Error
 import "core:fmt"
 import "core:log"
 import "core:mem"
@@ -20,7 +21,7 @@ Gfx_Texture :: struct {
 // --- Reference counting utilities ---
 
 // make_texture creates a new Gfx_Texture with proper reference counting
-make_texture :: proc(device: Gfx_Device, width, height: int, format: Texture_Format, usage: Texture_Usage, data: rawptr = nil) -> (Gfx_Texture, Gfx_Error) {
+make_texture :: proc(device: Gfx_Device, width, height: int, format: Texture_Format, usage: Texture_Usage, data: rawptr = nil) -> (Gfx_Texture, common.Engine_Error) {
     return gfx_api.create_texture(device, width, height, format, usage, data)
 }
 
@@ -80,7 +81,7 @@ Gl_Texture :: struct {
 // --- Helper to map interface format to GL formats/types ---
 
 @(private="file")
-get_gl_texture_formats :: proc(format: Texture_Format) -> (internal_format, gl_format, gl_type: gl.GLenum, err: Gfx_Error) {
+get_gl_texture_formats :: proc(format: Texture_Format) -> (internal_format, gl_format, gl_type: gl.GLenum, err: common.Engine_Error) {
 	#partial switch format {
 	case .R8:
 		return gl.R8, gl.RED, gl.UNSIGNED_BYTE, .None
@@ -96,7 +97,7 @@ get_gl_texture_formats :: proc(format: Texture_Format) -> (internal_format, gl_f
 	// 	return gl.DEPTH24_STENCIL8, gl.DEPTH_STENCIL, gl.UNSIGNED_INT_24_8, .None
 	case:
 		log.errorf("Unsupported texture format: %v", format)
-		return 0, 0, 0, .Texture_Creation_Failed // Or a more specific error "Unsupported_Format"
+		return 0, 0, 0, common.Engine_Error.Texture_Creation_Failed // Or a more specific error "Unsupported_Format"
 	}
 	return 0,0,0, .None // Should not be reached
 }
@@ -106,11 +107,11 @@ get_gl_texture_formats :: proc(format: Texture_Format) -> (internal_format, gl_f
 
 // gl_create_texture_impl creates a new OpenGL texture with the specified parameters.
 // The caller is responsible for destroying the texture when it's no longer needed.
-gl_create_texture_impl :: proc(device: Gfx_Device, width, height: int, format: Texture_Format, usage: Texture_Usage, data: rawptr = nil) -> (texture: Gfx_Texture, err: Gfx_Error) {
+gl_create_texture_impl :: proc(device: Gfx_Device, width, height: int, format: Texture_Format, usage: Texture_Usage, data: rawptr = nil) -> (texture: Gfx_Texture, err: common.Engine_Error) {
 	// Validate inputs
 	if width <= 0 || height <= 0 {
 		log.errorf("Invalid texture dimensions %dx%d", width, height)
-		return {}, .Invalid_Argument
+		return {}, common.Engine_Error.Invalid_Argument
 	}
 
 	// Get OpenGL format enums
@@ -125,7 +126,7 @@ gl_create_texture_impl :: proc(device: Gfx_Device, width, height: int, format: T
 	gl.GenTextures(1, &tex_id)
 	if tex_id == 0 {
 		log.error("Failed to generate OpenGL texture: glGenTextures failed")
-		return {}, .Texture_Creation_Failed
+		return {}, common.Engine_Error.Texture_Creation_Failed
 	}
 
 	// Set up error handling for texture operations
@@ -133,7 +134,7 @@ gl_create_texture_impl :: proc(device: Gfx_Device, width, height: int, format: T
 	if gl_error != gl.NO_ERROR {
 		log.errorf("OpenGL error before texture creation: 0x%x", gl_error)
 		gl.DeleteTextures(1, &tex_id)
-		return {}, .OpenGL_Error
+		return {}, common.Engine_Error.OpenGL_Error
 	}
 
 	// Bind the texture for configuration
@@ -167,7 +168,7 @@ gl_create_texture_impl :: proc(device: Gfx_Device, width, height: int, format: T
 	if gl_error != gl.NO_ERROR {
 		log.errorf("Failed to create texture (glTexImage2D): 0x%x", gl_error)
 		gl.DeleteTextures(1, &tex_id)
-		return {}, .OpenGL_Error
+		return {}, common.Engine_Error.OpenGL_Error
 	}
 
 	// Generate mipmaps if requested and data was provided
@@ -177,7 +178,7 @@ gl_create_texture_impl :: proc(device: Gfx_Device, width, height: int, format: T
 		if gl_error != gl.NO_ERROR {
 			log.errorf("Failed to generate mipmaps: 0x%x", gl_error)
 			gl.DeleteTextures(1, &tex_id)
-			return {}, .OpenGL_Error
+			return {}, common.Engine_Error.OpenGL_Error
 		}
 	}
 
@@ -189,7 +190,7 @@ gl_create_texture_impl :: proc(device: Gfx_Device, width, height: int, format: T
 	if !ok_device {
 		log.error("Invalid Gfx_Device type for texture creation")
 		gl.DeleteTextures(1, &tex_id)
-		return {}, .Invalid_Handle
+		return {}, common.Engine_Error.Invalid_Handle
 	}
 
 	gl_texture := new(Gl_Texture, device_ptr.main_allocator^)
@@ -213,7 +214,7 @@ gl_create_texture_impl :: proc(device: Gfx_Device, width, height: int, format: T
 	}
 
 	log.debugf("Created OpenGL texture %dx%d (ID: %v, format: %v)", width, height, tex_id, format)
-	return Gfx_Texture{gl_texture}, .None
+	return Gfx_Texture{gl_texture}, common.Engine_Error.None
 
 	gl.BindTexture(gl.TEXTURE_2D, 0) // Unbind
 
@@ -236,25 +237,25 @@ gl_create_texture_impl :: proc(device: Gfx_Device, width, height: int, format: T
 	gl_texture_ptr.main_allocator = device_ptr.main_allocator
 
 	log.infof("OpenGL Texture ID %v (%dx%d, format %v) created.", tex_id, width, height, format)
-	return Gfx_Texture{gl_texture_ptr}, .None
+	return Gfx_Texture{gl_texture_ptr}, common.Engine_Error.None
 }
 
-gl_update_texture_impl :: proc(texture: Gfx_Texture, x, y, width, height int, data: rawptr) -> Gfx_Error {
+gl_update_texture_impl :: proc(texture: Gfx_Texture, x, y, width, height int, data: rawptr) -> common.Engine_Error {
 	tex_ptr, ok := texture.variant.(^Gl_Texture)
 	if !ok || tex_ptr.id == 0 {
 		log.error("gl_update_texture: Invalid or uninitialized Gfx_Texture.")
-		return .Invalid_Handle
+		return common.Engine_Error.Invalid_Handle
 	}
 
 	if data == nil {
 		log.error("gl_update_texture: Data pointer is nil.")
-		return .Texture_Creation_Failed // Or a more specific error like Invalid_Argument
+		return common.Engine_Error.Texture_Creation_Failed // Or a more specific error like Invalid_Argument
 	}
 
 	if x < 0 || y < 0 || width <= 0 || height <= 0 || (x + width) > tex_ptr.width || (y + height) > tex_ptr.height {
 		log.errorf("gl_update_texture: Invalid update region (x:%d,y:%d, w:%d,h:%d) for texture size %dx%d.",
 			x, y, width, height, tex_ptr.width, tex_ptr.height)
-		return .Texture_Creation_Failed // Or out_of_bounds error
+		return common.Engine_Error.Texture_Creation_Failed // Or out_of_bounds error
 	}
 
 	gl.BindTexture(gl.TEXTURE_2D, tex_ptr.id)
@@ -288,7 +289,7 @@ gl_update_texture_impl :: proc(texture: Gfx_Texture, x, y, width, height int, da
 	}
 
 	log.infof("OpenGL Texture ID %v updated region (x:%d,y:%d, w:%d,h:%d).", tex_ptr.id, x, y, width, height)
-	return .None
+	return common.Engine_Error.None
 }
 
 // Internal cleanup function called when reference count reaches zero
@@ -328,16 +329,16 @@ gl_destroy_texture_impl :: proc(texture: Gfx_Texture) {
 // The caller is responsible for destroying the returned texture when it's no longer needed.
 // load_texture_from_file loads a texture from a file and returns a reference-counted Gfx_Texture.
 // The caller is responsible for calling destroy_texture when done with the texture.
-load_texture_from_file :: proc(device: Gfx_Device, filepath: string, generate_mipmaps: bool = true) -> (texture: Gfx_Texture, err: Gfx_Error) {
+load_texture_from_file :: proc(device: Gfx_Device, filepath: string, generate_mipmaps: bool = true) -> (texture: Gfx_Texture, err: common.Engine_Error) {
     // Validate input parameters
     if !is_valid(device) {
         log.error("load_texture_from_file: Invalid Gfx_Device provided")
-        return {}, .Invalid_Handle
+        return {}, common.Engine_Error.Invalid_Handle
     }
 
     if len(filepath) == 0 {
         log.error("load_texture_from_file: Empty file path provided")
-        return {}, .Invalid_Argument
+        return {}, common.Engine_Error.Invalid_Argument
     }
 
     log.debugf("Loading texture from file: %s", filepath)
@@ -346,7 +347,7 @@ load_texture_from_file :: proc(device: Gfx_Device, filepath: string, generate_mi
     data, width, height, comp, err_load := image.load_from_file(filepath, 0)
     if err_load != nil || data == nil {
         log.errorf("Failed to load image from file '%s': %v", filepath, err_load)
-        return {}, .Texture_Creation_Failed
+        return {}, common.Engine_Error.Texture_Creation_Failed
     }
     
     // Ensure image data is always freed, even on early returns
@@ -366,7 +367,7 @@ load_texture_from_file :: proc(device: Gfx_Device, filepath: string, generate_mi
     case 4: format = .RGBA8
     case:
         log.errorf("Unsupported number of components (%d) in image '%s'", comp, filepath)
-        return {}, .Unsupported_Format
+        return {}, common.Engine_Error.Unsupported_Format
     }
 
     // Prepare texture usage flags
@@ -379,7 +380,7 @@ load_texture_from_file :: proc(device: Gfx_Device, filepath: string, generate_mi
     texture, create_err := make_texture(device, width, height, format, usage, data)
     if create_err != .None {
         log.errorf("Failed to create Gfx_Texture from image '%s': %s", 
-                  filepath, gfx_api.get_error_string(create_err))
+                  filepath, gfx_api.get_error_string(create_err)) // Assuming gfx_api.get_error_string is updated
         return {}, create_err
     }
 
@@ -392,11 +393,11 @@ load_texture_from_file :: proc(device: Gfx_Device, filepath: string, generate_mi
 
     log.debugf("Successfully created texture from file '%s' (refcount: %d)", 
               filepath, get_texture_ref_count(texture))
-    return texture, .None
+    return texture, common.Engine_Error.None
 }
 
 // Keep the old function name for backward compatibility
-load_texture_from_file_gfx :: proc(device: Gfx_Device, filepath: string, generate_mipmaps: bool = true) -> (Gfx_Texture, Gfx_Error) {
+load_texture_from_file_gfx :: proc(device: Gfx_Device, filepath: string, generate_mipmaps: bool = true) -> (Gfx_Texture, common.Engine_Error) {
     log.warn("load_texture_from_file_gfx is deprecated, use load_texture_from_file instead")
     return load_texture_from_file(device, filepath, generate_mipmaps)
 }
@@ -416,11 +417,11 @@ load_texture_from_file_gfx :: proc(device: Gfx_Device, filepath: string, generat
 
 // --- Texture Binding Implementation ---
 
-gl_bind_texture_to_unit_impl :: proc(device: Gfx_Device, texture: Gfx_Texture, unit: u32) -> Gfx_Error {
+gl_bind_texture_to_unit_impl :: proc(device: Gfx_Device, texture: Gfx_Texture, unit: u32) -> common.Engine_Error {
 	// device_ptr, ok_device := device.variant.(^Gl_Device)
 	// if !ok_device {
 	// 	log.error("gl_bind_texture_to_unit: Invalid Gfx_Device type.")
-	// 	return .Invalid_Handle
+	// 	return common.Engine_Error.Invalid_Handle
 	// }
 	// No device specific state needed for bind_texture, relies on current GL context.
 
@@ -430,7 +431,7 @@ gl_bind_texture_to_unit_impl :: proc(device: Gfx_Device, texture: Gfx_Texture, u
 		gl.ActiveTexture(gl.TEXTURE0 + gl.GLenum(unit))
 		gl.BindTexture(gl.TEXTURE_2D, 0)
 		// log.warnf("gl_bind_texture_to_unit: Invalid Gfx_Texture provided. Unbinding texture unit %d.", unit)
-		return .None // Or .Invalid_Handle if strictly requiring valid texture
+		return common.Engine_Error.None // Or .Invalid_Handle if strictly requiring valid texture
 	}
 
 	if tex_ptr.id == 0 {
@@ -438,20 +439,20 @@ gl_bind_texture_to_unit_impl :: proc(device: Gfx_Device, texture: Gfx_Texture, u
 		gl.ActiveTexture(gl.TEXTURE0 + gl.GLenum(unit))
 		gl.BindTexture(gl.TEXTURE_2D, 0)
 		// log.warnf("gl_bind_texture_to_unit: Gfx_Texture ID is 0. Unbinding texture unit %d.", unit)
-		return .None
+		return common.Engine_Error.None
 	}
 	
 	max_units : i32
 	gl.GetIntegerv(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS, &max_units)
 	if unit >= u32(max_units) {
 		log.errorf("gl_bind_texture_to_unit: Texture unit %d exceeds maximum available units (%d).", unit, max_units)
-		return .Invalid_Handle // Or some "Invalid_Unit" error
+		return common.Engine_Error.Invalid_Handle // Or some "Invalid_Unit" error
 	}
 
 	gl.ActiveTexture(gl.TEXTURE0 + gl.GLenum(unit))
 	gl.BindTexture(gl.TEXTURE_2D, tex_ptr.id)
 	// log.debugf("Bound texture ID %v to unit %v", tex_ptr.id, unit) // Can be spammy
-	return .None
+	return common.Engine_Error.None
 }
 
 // --- Texture Utility Implementations ---

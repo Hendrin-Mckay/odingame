@@ -1,12 +1,16 @@
 package vulkan
 
 import vk "vendor:vulkan"
+import "../../common" // For common.Engine_Error
+import "../gfx_interface" // For Gfx_Error -> common.Engine_Error (used in comments)
+import "./vk_types" // For vk_types.Vk_Device_Internal
 import "core:log"
 import "core:mem" // Added for mem.Allocator, if used by helpers
 import "core:fmt"
 import "core:os"
 import "core:strings"
 import "core:slice"
+
 
 // --- Validation Layers ---
 // Define the validation layers to request.
@@ -316,7 +320,7 @@ find_memory_type_internal :: proc(
 // - tiling: Tiling mode (OPTIMAL or LINEAR).
 // - usage: How the image will be used (e.g., SAMPLED_BIT, COLOR_ATTACHMENT_BIT).
 // - mem_properties: Required memory properties for the image memory (e.g., DEVICE_LOCAL_BIT).
-// Returns the created vk.Image, vk.DeviceMemory, and a Gfx_Error.
+// Returns the created vk.Image, vk.DeviceMemory, and a common.Engine_Error.
 // On failure, vk.NULL_HANDLEs and an error code are returned. Resources are cleaned up.
 vk_create_image_internal :: proc(
 	device_internal: ^vk_types.Vk_Device_Internal, // Use vk_types.Vk_Device_Internal
@@ -331,7 +335,7 @@ vk_create_image_internal :: proc(
 ) -> (
 	image: vk.Image, 
 	image_memory: vk.DeviceMemory, 
-	err: gfx_interface.Gfx_Error,
+	err: common.Engine_Error,
 ) {
 	logical_device  := device_internal.logical_device
 	physical_device := device_internal.physical_device_info.physical_device
@@ -355,7 +359,7 @@ vk_create_image_internal :: proc(
 	create_res := vk.CreateImage(logical_device, &image_create_info, p_vk_allocator, &image)
 	if create_res != .SUCCESS {
 		log.errorf("vkCreateImage failed. Result: %v", create_res)
-		return vk.NULL_HANDLE, vk.NULL_HANDLE, .Texture_Creation_Failed
+		return vk.NULL_HANDLE, vk.NULL_HANDLE, common.Engine_Error.Texture_Creation_Failed
 	}
 	log.debugf("Vulkan image %p created successfully. Dim: %dx%dx%d, Fmt: %v, Usage: %v", image, width, height, depth, format, usage)
 
@@ -369,7 +373,7 @@ vk_create_image_internal :: proc(
 	if !ok_mem_type {
 		log.errorf("Failed to find suitable memory type for image %p.", image)
 		vk.DestroyImage(logical_device, image, p_vk_allocator) // Cleanup created image
-		return vk.NULL_HANDLE, vk.NULL_HANDLE, .Texture_Creation_Failed // Or a more specific memory error
+		return vk.NULL_HANDLE, vk.NULL_HANDLE, common.Engine_Error.Texture_Creation_Failed // Or a more specific memory error
 	}
 
 	// Allocate memory
@@ -382,7 +386,7 @@ vk_create_image_internal :: proc(
 	if alloc_res != .SUCCESS {
 		log.errorf("vkAllocateMemory for image %p failed. Result: %v", image, alloc_res)
 		vk.DestroyImage(logical_device, image, p_vk_allocator) // Cleanup created image
-		return vk.NULL_HANDLE, vk.NULL_HANDLE, .Texture_Creation_Failed // Or specific memory error
+		return vk.NULL_HANDLE, vk.NULL_HANDLE, common.Engine_Error.Texture_Creation_Failed // Or specific memory error
 	}
 	log.debugf("Device memory %p allocated for image %p. Size: %v, TypeIndex: %d", image_memory, image, mem_reqs.size, mem_type_idx)
 
@@ -394,7 +398,7 @@ vk_create_image_internal :: proc(
 		log.errorf("vkBindImageMemory for image %p with memory %p failed. Result: %v", image, image_memory, bind_res)
 		vk.FreeMemory(logical_device, image_memory, p_vk_allocator) // Cleanup allocated memory
 		vk.DestroyImage(logical_device, image, p_vk_allocator)    // Cleanup created image
-		return vk.NULL_HANDLE, vk.NULL_HANDLE, .Texture_Creation_Failed
+		return vk.NULL_HANDLE, vk.NULL_HANDLE, common.Engine_Error.Texture_Creation_Failed
 	}
 	log.debugf("Successfully bound memory %p to image %p.", image_memory, image)
 
@@ -406,7 +410,7 @@ vk_create_image_internal :: proc(
 // - image: The Vulkan image for which to create a view.
 // - format: The format of the image view (should match the image's format).
 // - aspect_flags: Specifies which aspects of the image are included in the view (e.g., .COLOR_BIT, .DEPTH_BIT).
-// Returns the created vk.ImageView and a Gfx_Error.
+// Returns the created vk.ImageView and a common.Engine_Error.
 // On failure, vk.NULL_HANDLE and an error code are returned.
 vk_create_image_view_internal :: proc(
 	device_logical: vk.Device,
@@ -416,7 +420,7 @@ vk_create_image_view_internal :: proc(
 	// allocator: mem.Allocator, // Odin allocator, if needed for any host-side allocations by this helper
 ) -> (
 	image_view: vk.ImageView,
-	err: gfx_interface.Gfx_Error,
+	err: common.Engine_Error,
 ) {
 	p_vk_allocator: ^vk.AllocationCallbacks = nil // Using nil for Vulkan allocators
 
@@ -442,7 +446,7 @@ vk_create_image_view_internal :: proc(
 	create_res := vk.CreateImageView(device_logical, &view_create_info, p_vk_allocator, &image_view)
 	if create_res != .SUCCESS {
 		log.errorf("vkCreateImageView failed. Result: %v", create_res)
-		return vk.NULL_HANDLE, .Texture_Creation_Failed // Or a more specific view creation error
+		return vk.NULL_HANDLE, common.Engine_Error.Texture_Creation_Failed // Or a more specific view creation error
 	}
 	log.debugf("Vulkan image view %p created successfully for image %p. Format: %v, Aspect: %v", image_view, image, format, aspect_flags)
 
@@ -452,7 +456,7 @@ vk_create_image_view_internal :: proc(
 // vk_create_sampler_internal creates a Vulkan sampler with common settings.
 // - device_logical: The logical device.
 // - physical_device_info: Information about the physical device, including properties and features.
-// Returns the created vk.Sampler and a Gfx_Error.
+// Returns the created vk.Sampler and a common.Engine_Error.
 // On failure, vk.NULL_HANDLE and an error code are returned.
 vk_create_sampler_internal :: proc(
 	device_logical: vk.Device,
@@ -460,7 +464,7 @@ vk_create_sampler_internal :: proc(
 	// allocator: mem.Allocator, // Odin allocator, if needed for any host-side allocations by this helper
 ) -> (
 	sampler: vk.Sampler,
-	err: gfx_interface.Gfx_Error,
+	err: common.Engine_Error,
 ) {
 	p_vk_allocator: ^vk.AllocationCallbacks = nil
 
@@ -502,7 +506,7 @@ vk_create_sampler_internal :: proc(
 	create_res := vk.CreateSampler(device_logical, &sampler_create_info, p_vk_allocator, &sampler)
 	if create_res != .SUCCESS {
 		log.errorf("vkCreateSampler failed. Result: %v", create_res)
-		return vk.NULL_HANDLE, .Texture_Creation_Failed // Or a more specific sampler creation error
+		return vk.NULL_HANDLE, common.Engine_Error.Texture_Creation_Failed // Or a more specific sampler creation error
 	}
 	log.debugf("Vulkan sampler %p created successfully.", sampler)
 
@@ -514,13 +518,13 @@ vk_create_sampler_internal :: proc(
 // vk_begin_single_time_commands_internal allocates and begins a new command buffer
 // for short-lived, one-time submit operations (e.g., resource transitions, copies).
 // - device_internal: Reference to our internal Vulkan device struct.
-// Returns the allocated and begun command buffer, and a Gfx_Error.
+// Returns the allocated and begun command buffer, and a common.Engine_Error.
 // On failure, vk.NULL_HANDLE and an error code are returned.
 vk_begin_single_time_commands_internal :: proc(
 	device_internal: ^vk_types.Vk_Device_Internal,
 ) -> (
 	cmd_buffer: vk.CommandBuffer, // vk.CommandBuffer is vk.Command_Buffer_Handle
-	err: gfx_interface.Gfx_Error,
+	err: common.Engine_Error,
 ) {
 	logical_device := device_internal.logical_device
 	// Assuming device_internal.command_pool is the correct pool for graphics/transfer operations.
@@ -530,7 +534,7 @@ vk_begin_single_time_commands_internal :: proc(
 
 	if command_pool == vk.NULL_HANDLE {
 		log.error("vk_begin_single_time_commands_internal: Device command pool is NULL.")
-		return vk.NULL_HANDLE, .Invalid_Handle 
+		return vk.NULL_HANDLE, common.Engine_Error.Invalid_Handle 
 	}
 
 	alloc_info := vk.CommandBufferAllocateInfo{
@@ -543,7 +547,7 @@ vk_begin_single_time_commands_internal :: proc(
 	alloc_res := vk.AllocateCommandBuffers(logical_device, &alloc_info, &cmd_buffer)
 	if alloc_res != .SUCCESS {
 		log.errorf("vkAllocateCommandBuffers for single-time command failed. Result: %v", alloc_res)
-		return vk.NULL_HANDLE, .Buffer_Creation_Failed // Or a more generic error
+		return vk.NULL_HANDLE, common.Engine_Error.Buffer_Creation_Failed // Or a more generic error
 	}
 	log.debugf("Single-time command buffer %p allocated.", cmd_buffer)
 
@@ -557,7 +561,7 @@ vk_begin_single_time_commands_internal :: proc(
 		log.errorf("vkBeginCommandBuffer for single-time command buffer %p failed. Result: %v", cmd_buffer, begin_res)
 		// Free the allocated command buffer as we failed to begin it.
 		vk.FreeCommandBuffers(logical_device, command_pool, 1, &cmd_buffer)
-		return vk.NULL_HANDLE, .Device_Operation_Failed 
+		return vk.NULL_HANDLE, common.Engine_Error.Device_Operation_Failed 
 	}
 	log.debugf("Single-time command buffer %p recording begun.", cmd_buffer)
 
@@ -567,12 +571,12 @@ vk_begin_single_time_commands_internal :: proc(
 // vk_end_single_time_commands_internal ends, submits, and frees a single-time command buffer.
 // - device_internal: Reference to our internal Vulkan device struct.
 // - cmd_buffer: The command buffer to end and submit.
-// Returns a Gfx_Error if any step fails.
+// Returns a common.Engine_Error if any step fails.
 vk_end_single_time_commands_internal :: proc(
 	device_internal: ^vk_types.Vk_Device_Internal,
 	cmd_buffer: vk.CommandBuffer,
 ) -> (
-	err: gfx_interface.Gfx_Error,
+	err: common.Engine_Error,
 ) {
 	logical_device := device_internal.logical_device
 	graphics_queue := device_internal.graphics_queue
@@ -581,15 +585,15 @@ vk_end_single_time_commands_internal :: proc(
 
 	if cmd_buffer == vk.NULL_HANDLE {
 		log.error("vk_end_single_time_commands_internal: Provided command buffer is NULL.")
-		return .Invalid_Handle
+		return common.Engine_Error.Invalid_Handle
 	}
 	if graphics_queue == vk.NULL_HANDLE {
 		log.error("vk_end_single_time_commands_internal: Device graphics queue is NULL.")
-		return .Invalid_Handle 
+		return common.Engine_Error.Invalid_Handle 
 	}
 	if command_pool == vk.NULL_HANDLE {
 		log.error("vk_end_single_time_commands_internal: Device command pool is NULL.")
-		return .Invalid_Handle 
+		return common.Engine_Error.Invalid_Handle 
 	}
 	
 	// End command buffer recording
@@ -598,7 +602,7 @@ vk_end_single_time_commands_internal :: proc(
 		log.errorf("vkEndCommandBuffer for single-time command buffer %p failed. Result: %v", cmd_buffer, end_res)
 		// Command buffer is in a bad state, but still try to free it.
 		vk.FreeCommandBuffers(logical_device, command_pool, 1, &cmd_buffer)
-		return .Device_Operation_Failed
+		return common.Engine_Error.Device_Operation_Failed
 	}
 	log.debugf("Single-time command buffer %p recording ended.", cmd_buffer)
 
@@ -614,7 +618,7 @@ vk_end_single_time_commands_internal :: proc(
 	if submit_res != .SUCCESS {
 		log.errorf("vkQueueSubmit for single-time command buffer %p failed. Result: %v", cmd_buffer, submit_res)
 		vk.FreeCommandBuffers(logical_device, command_pool, 1, &cmd_buffer)
-		return .Device_Operation_Failed
+		return common.Engine_Error.Device_Operation_Failed
 	}
 	log.debugf("Single-time command buffer %p submitted to graphics queue %p.", cmd_buffer, graphics_queue)
 
@@ -624,7 +628,7 @@ vk_end_single_time_commands_internal :: proc(
 		log.errorf("vkQueueWaitIdle for graphics queue %p after single-time command submission failed. Result: %v", graphics_queue, wait_res)
 		// Even if wait fails, the command buffer was submitted. Still try to free it.
 		vk.FreeCommandBuffers(logical_device, command_pool, 1, &cmd_buffer)
-		return .Device_Operation_Failed // Or a specific timeout/wait error
+		return common.Engine_Error.Device_Operation_Failed // Or a specific timeout/wait error
 	}
 	log.debugf("Graphics queue %p idle after single-time command.", graphics_queue)
 
@@ -641,7 +645,7 @@ vk_end_single_time_commands_internal :: proc(
 // - image: The destination Vulkan image.
 // - width, height: Dimensions of the image region to copy.
 // Assumes image is already in a layout suitable for transfer destination (e.g., .TRANSFER_DST_OPTIMAL).
-// Returns a Gfx_Error if any step fails.
+// Returns a common.Engine_Error if any step fails.
 vk_copy_buffer_to_image_internal :: proc(
 	device_internal: ^vk_types.Vk_Device_Internal,
 	buffer: vk.Buffer,
@@ -650,7 +654,7 @@ vk_copy_buffer_to_image_internal :: proc(
 	height: u32,
 	depth: u32, // Typically 1 for 2D images
 ) -> (
-	err: gfx_interface.Gfx_Error,
+	err: common.Engine_Error,
 ) {
 	cmd_buffer, begin_err := vk_begin_single_time_commands_internal(device_internal)
 	if begin_err != .None {
@@ -699,7 +703,7 @@ vk_copy_buffer_to_image_internal :: proc(
 // - old_layout: The current layout of the image.
 // - new_layout: The desired new layout of the image.
 // - mip_levels: The number of mip levels in the image (typically 1 if not using mipmapping).
-// Returns a Gfx_Error if any step fails.
+// Returns a common.Engine_Error if any step fails.
 vk_transition_image_layout_internal :: proc(
 	device_internal: ^vk_types.Vk_Device_Internal,
 	image: vk.Image,
@@ -708,7 +712,7 @@ vk_transition_image_layout_internal :: proc(
 	new_layout: vk.ImageLayout,
 	mip_levels: u32, // Number of mip levels to transition
 ) -> (
-	err: gfx_interface.Gfx_Error,
+	err: common.Engine_Error,
 ) {
 	cmd_buffer, begin_err := vk_begin_single_time_commands_internal(device_internal)
 	if begin_err != .None {
@@ -779,7 +783,7 @@ vk_transition_image_layout_internal :: proc(
 		log.errorf("vk_transition_image_layout: Unsupported layout transition from %v to %v", old_layout, new_layout)
 		// Attempt to free the command buffer even if we don't submit.
 		vk.FreeCommandBuffers(device_internal.logical_device, device_internal.command_pool, 1, &cmd_buffer)
-		return .Not_Implemented 
+		return common.Engine_Error.Not_Implemented 
 	}
 
 	vk.CmdPipelineBarrier(

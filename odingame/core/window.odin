@@ -31,7 +31,7 @@ new_window :: proc(
 	// flags: graphics.Window_Flags, // TODO: Add flags if Gfx_Window supports them (e.g. resizable)
 ) -> (^Window, common.Engine_Error) {
 
-	if !is_valid(device) { // is_valid for Gfx_Device
+	if !graphics.is_valid(device) { // Use graphics.is_valid
 		log.error("new_window: Provided Gfx_Device is invalid.")
 		return nil, common.Engine_Error.Invalid_Handle
 	}
@@ -40,7 +40,7 @@ new_window :: proc(
 	if err != .None {
 		log.errorf("new_window: gfx_api.create_window failed: %s", graphics.gfx_api.get_error_string(err))
 		// Don't destroy device here, caller owns it.
-		return nil, graphics.gfx_error_to_engine_error(err) // Convert Gfx_Error to Engine_Error
+		return nil, err // Already common.Engine_Error
 	}
 
 	win := new(Window)
@@ -58,14 +58,6 @@ new_window :: proc(
 	return win, nil
 }
 
-// Helper to check if a Gfx_Device is valid (basic check)
-// TODO: Move to a common utility or make it part of Gfx_Device itself if possible
-is_valid :: proc(device: graphics.Gfx_Device) -> bool {
-    return device.variant != nil // Basic check: if variant is not nil, assume it's initialized.
-                                 // A more robust check might involve querying device status if API allows.
-}
-
-
 // Set the window title
 // This implementation uses the graphics API to change the window title
 set_title :: proc(win: ^Window, title: string) -> common.Engine_Error {
@@ -78,7 +70,7 @@ set_title :: proc(win: ^Window, title: string) -> common.Engine_Error {
 	err := graphics.gfx_api.set_window_title(win.gfx_window, title)
 	if err != .None {
 		log.errorf("set_title: Failed to set window title: %s", graphics.gfx_api.get_error_string(err))
-		return graphics.gfx_error_to_engine_error(err)
+		return err // Already common.Engine_Error
 	}
 	
 	// Update the local title field

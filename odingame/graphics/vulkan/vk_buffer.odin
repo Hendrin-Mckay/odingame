@@ -3,313 +3,380 @@ package vulkan
 import vk "vendor:vulkan"
 import "core:log"
 import "core:mem"
-import "../gfx_interface" // For Gfx_Device, Gfx_Error, Gfx_Buffer, Buffer_Type
+import "../gfx_interface" 
+import "../../common" 
+import "./vk_types" // For Vk_Device_Variant, Vk_Buffer_Internal, Vk_Uniform_Buffer_Info
 
-// Vk_Buffer_Internal holds the Vulkan-specific buffer data.
-Vk_Buffer_Internal :: struct {
-	buffer:          vk.Buffer,
-	memory:          vk.DeviceMemory,
-	device_ref:      ^Vk_Device_Internal, // Reference to the logical device & physical device info
-	size:            vk.DeviceSize,     // Size of the buffer in bytes
-	allocator:       mem.Allocator,     // Allocator used for this struct
-	mapped_ptr:      rawptr,            // Pointer to mapped memory, if currently mapped
-	// For persistent mapping, one might store usage flags (host_visible, coherent, cached)
-}
-
-// find_memory_type_internal finds a suitable memory type index.
+// find_memory_type_internal (already defined, assuming it's correct from previous context)
 find_memory_type_internal :: proc(
 	physical_device_handle: vk.PhysicalDevice,
-	type_filter: u32, // Bitmask of allowed memory type indices from vk.MemoryRequirements
-	properties: vk.MemoryPropertyFlags, // Required memory properties (e.g., HOST_VISIBLE, DEVICE_LOCAL)
+	type_filter: u32, 
+	properties: vk.MemoryPropertyFlags, 
 ) -> (
 	memory_type_index: u32,
 	found: bool,
 ) {
 	mem_properties: vk.PhysicalDeviceMemoryProperties
 	vk.GetPhysicalDeviceMemoryProperties(physical_device_handle, &mem_properties)
-
 	for i := u32(0); i < mem_properties.memoryTypeCount; i = i + 1 {
-		// Check if this memory type is allowed by the type_filter
 		if (type_filter & (1 << i)) != 0 {
-			// Check if this memory type has all the required properties
 			if (mem_properties.memoryTypes[i].propertyFlags & properties) == properties {
-				log.debugf("Found suitable memory type: Index %d, Flags %#x", i, mem_properties.memoryTypes[i].propertyFlags)
 				return i, true
 			}
 		}
 	}
-
 	log.errorf("Failed to find suitable memory type. Filter: %#x, Required Properties: %#x", type_filter, properties)
-	// Log available memory types for debugging
-	for i := u32(0); i < mem_properties.memoryTypeCount; i = i + 1 {
-		log.debugf("  Available Memory Type %d: Flags %#x, Heap Index %d", i, mem_properties.memoryTypes[i].propertyFlags, mem_properties.memoryTypes[i].heapIndex)
-		log.debugf("    Heap %d: Size %v bytes, Flags %#x", mem_properties.memoryTypes[i].heapIndex, mem_properties.memoryHeaps[mem_properties.memoryTypes[i].heapIndex].size, mem_properties.memoryHeaps[mem_properties.memoryTypes[i].heapIndex].flags)
-	}
 	return 0, false
 }
 
 
-// vk_create_buffer_internal creates a Vulkan buffer, allocates memory, and optionally uploads initial data.
 vk_create_buffer_internal :: proc(
 	gfx_device: gfx_interface.Gfx_Device,
 	buffer_type: gfx_interface.Buffer_Type,
-	size_bytes: int, // Renamed from 'size' to avoid conflict with Vk_Buffer_Internal.size
+	size_bytes: int, 
 	initial_data: rawptr,
-	dynamic: bool, // Hint for memory properties, though currently all are host-visible
-) -> (gfx_interface.Gfx_Buffer, gfx_interface.Gfx_Error) {
+	dynamic: bool, // This flag's meaning might need to be re-evaluated.
+	              // For UBOs, we always want HOST_VISIBLE. For VBO/IBO, `dynamic` could mean HOST_VISIBLE.
+) -> (gfx_interface.Gfx_Buffer, common.Engine_Error) {
 
-	vk_dev_internal, ok_dev := gfx_device.variant.(Vk_Device_Variant)
-	if !ok_dev || vk_dev_internal == nil {
-		log.error("vk_create_buffer: Invalid Gfx_Device (not Vulkan or nil variant).")
-		return gfx_interface.Gfx_Buffer{}, .Invalid_Handle
+	vk_dev_variant, ok_dev := gfx_device.variant.(vk_types.Vk_Device_Variant)
+	if !ok_dev || vk_dev_variant == nil {
+		return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Invalid_Handle
 	}
-	logical_device := vk_dev_internal.logical_device
+	vk_dev_internal := vk_dev_variant
+	logical_device  := vk_dev_internal.logical_device
 	physical_device := vk_dev_internal.physical_device_info.physical_device
-	allocator := vk_dev_internal.allocator // Use device's allocator for the Vk_Buffer_Internal struct
+	allocator       := vk_dev_internal.allocator
+	p_vk_allocator: ^vk.AllocationCallbacks = nil
 
 	if size_bytes <= 0 {
-		log.errorf("Buffer size must be positive. Requested: %d", size_bytes)
-		return gfx_interface.Gfx_Buffer{}, .Buffer_Creation_Failed // Or Invalid_Parameter
+		return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Invalid_Parameter
 	}
 
-	// 1. Determine Buffer Usage
 	usage_flags: vk.BufferUsageFlags
+	mem_props: vk.MemoryPropertyFlags
+
+	is_uniform_buffer := false
 	#partial switch buffer_type {
 	case .Vertex:
 		usage_flags |= {.VERTEX_BUFFER_BIT}
+		// If dynamic, make it host visible for frequent updates. Otherwise, device local.
+        // For now, keeping simple as before: all are HOST_VISIBLE.
+        // if dynamic {
+		// 	mem_props = {.HOST_VISIBLE_BIT, .HOST_COHERENT_BIT}
+		// } else {
+		// 	usage_flags |= {.TRANSFER_DST_BIT} // For initial upload via staging
+		// 	mem_props = {.DEVICE_LOCAL_BIT}
+		// }
+        mem_props = {.HOST_VISIBLE_BIT, .HOST_COHERENT_BIT} 
 	case .Index:
 		usage_flags |= {.INDEX_BUFFER_BIT}
+		// Similar memory strategy as Vertex buffers.
+        // if dynamic {
+		// 	mem_props = {.HOST_VISIBLE_BIT, .HOST_COHERENT_BIT}
+		// } else {
+		// 	usage_flags |= {.TRANSFER_DST_BIT}
+		// 	mem_props = {.DEVICE_LOCAL_BIT}
+		// }
+        mem_props = {.HOST_VISIBLE_BIT, .HOST_COHERENT_BIT}
 	case .Uniform:
+		is_uniform_buffer = true
 		usage_flags |= {.UNIFORM_BUFFER_BIT}
-	// case .Storage: usage_flags |= {.STORAGE_BUFFER_BIT} // For future
-	// case .Staging: usage_flags |= {.TRANSFER_SRC_BIT}   // For future
+		// Uniform buffers are typically updated frequently from CPU, so HOST_VISIBLE and HOST_COHERENT.
+		mem_props = {.HOST_VISIBLE_BIT, .HOST_COHERENT_BIT}
+    case .Transfer_Src: // Added for staging buffers
+        usage_flags |= {.TRANSFER_SRC_BIT}
+        mem_props = {.HOST_VISIBLE_BIT, .HOST_COHERENT_BIT}
 	}
-	// If initial_data is provided, buffer might also need TRANSFER_DST_BIT if we used a staging buffer.
-	// For direct mapping, it's not strictly needed for the buffer itself.
-	log.debugf("Creating buffer: Type %v, Size %d bytes, UsageFlags %#x", buffer_type, size_bytes, usage_flags)
+    // If initial_data is provided and buffer is not HOST_VISIBLE (e.g. DEVICE_LOCAL),
+    // it would require TRANSFER_DST_BIT for staging buffer copy.
+    if initial_data != nil && !(.HOST_VISIBLE_BIT in mem_props) {
+        usage_flags |= {.TRANSFER_DST_BIT}
+    }
 
-	// 2. Create Buffer
+
 	buffer_create_info := vk.BufferCreateInfo{
 		sType = .BUFFER_CREATE_INFO,
-		size = vk.DeviceSize(size_bytes),
+		size  = vk.DeviceSize(size_bytes),
 		usage = usage_flags,
-		sharingMode = .EXCLUSIVE, // Assuming not sharing buffers between queue families for now
-		// flags can be .SPARSE_BINDING_BIT etc.
+		sharingMode = .EXCLUSIVE,
 	}
-	p_vk_allocator: ^vk.AllocationCallbacks = nil // Using nil for Vulkan allocation callbacks
+	
 	buffer_handle: vk.Buffer
 	result := vk.CreateBuffer(logical_device, &buffer_create_info, p_vk_allocator, &buffer_handle)
 	if result != .SUCCESS {
-		log.errorf("vkCreateBuffer failed. Result: %v (%d)", result, int(result))
-		return gfx_interface.Gfx_Buffer{}, .Buffer_Creation_Failed
+		return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
 	}
-	log.debugf("Vulkan Buffer created successfully: %p", buffer_handle)
 
-	// 3. Get Memory Requirements
 	mem_reqs: vk.MemoryRequirements
 	vk.GetBufferMemoryRequirements(logical_device, buffer_handle, &mem_reqs)
-	log.debugf("Buffer memory requirements: Size %v, Alignment %v, TypeFilter %#x", mem_reqs.size, mem_reqs.alignment, mem_reqs.memoryTypeBits)
 
-	// 4. Determine Memory Properties
-	// For now, all buffers are host-visible and coherent for simplicity with initial data upload and mapping.
-	// `dynamic` flag is a hint but not fully utilized yet to differentiate DEVICE_LOCAL.
-	// TODO: Use `DEVICE_LOCAL_BIT` for static buffers and implement staging buffer uploads.
-	mem_props: vk.MemoryPropertyFlags = {.HOST_VISIBLE_BIT, .HOST_COHERENT_BIT}
-	// if !dynamic && initial_data != nil { 
-	//    mem_props = {.DEVICE_LOCAL_BIT} // Ideal for static data, would require staging
-	// }
-
-	// 5. Find Suitable Memory Type
 	memory_type_idx, found_mem_type := find_memory_type_internal(physical_device, mem_reqs.memoryTypeBits, mem_props)
 	if !found_mem_type {
-		log.error("Failed to find suitable memory type for buffer.")
-		vk.DestroyBuffer(logical_device, buffer_handle, p_vk_allocator) // Cleanup created buffer
-		return gfx_interface.Gfx_Buffer{}, .Buffer_Creation_Failed
+		vk.DestroyBuffer(logical_device, buffer_handle, p_vk_allocator)
+		return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
 	}
 
-	// 6. Allocate Memory
 	alloc_info := vk.MemoryAllocateInfo{
-		sType = .MEMORY_ALLOCATE_INFO,
-		allocationSize = mem_reqs.size, // Use reported size from mem_reqs
+		sType           = .MEMORY_ALLOCATE_INFO,
+		allocationSize  = mem_reqs.size,
 		memoryTypeIndex = memory_type_idx,
 	}
 	device_memory: vk.DeviceMemory
 	result = vk.AllocateMemory(logical_device, &alloc_info, p_vk_allocator, &device_memory)
 	if result != .SUCCESS {
-		log.errorf("vkAllocateMemory failed for buffer. Result: %v (%d)", result, int(result))
-		vk.DestroyBuffer(logical_device, buffer_handle, p_vk_allocator) // Cleanup
-		return gfx_interface.Gfx_Buffer{}, .Buffer_Creation_Failed
+		vk.DestroyBuffer(logical_device, buffer_handle, p_vk_allocator)
+		return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
 	}
-	log.debugf("Device memory allocated for buffer: %p (Size: %v, TypeIndex: %d)", device_memory, mem_reqs.size, memory_type_idx)
 
-	// 7. Bind Buffer Memory
-	// The offset for binding is usually 0.
 	result = vk.BindBufferMemory(logical_device, buffer_handle, device_memory, 0)
 	if result != .SUCCESS {
-		log.errorf("vkBindBufferMemory failed. Result: %v (%d)", result, int(result))
-		vk.FreeMemory(logical_device, device_memory, p_vk_allocator) // Cleanup
-		vk.DestroyBuffer(logical_device, buffer_handle, p_vk_allocator) // Cleanup
-		return gfx_interface.Gfx_Buffer{}, .Buffer_Creation_Failed
+		vk.FreeMemory(logical_device, device_memory, p_vk_allocator)
+		vk.DestroyBuffer(logical_device, buffer_handle, p_vk_allocator)
+		return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
 	}
-	log.debug("Memory bound to buffer successfully.")
 
-	// 8. Upload Initial Data (if provided)
-	if initial_data != nil {
-		log.debugf("Uploading initial data to buffer %p (%d bytes)...", buffer_handle, size_bytes)
-		mapped_data_ptr: rawptr
-		// Map the entire buffer for simplicity (offset 0, size buffer_create_info.size).
-		map_result := vk.MapMemory(logical_device, device_memory, 0, buffer_create_info.size, 0, &mapped_data_ptr)
-		if map_result == .SUCCESS && mapped_data_ptr != nil {
-			mem.copy(mapped_data_ptr, initial_data, int(size_bytes))
-			// HOST_COHERENT_BIT ensures writes are visible without explicit flush, assuming it's set.
-			// If not coherent, would need:
-			// flushed_range := vk.MappedMemoryRange{ sType = .MAPPED_MEMORY_RANGE, memory = device_memory, offset = 0, size = vk.WHOLE_SIZE }
-			// vk.FlushMappedMemoryRanges(logical_device, 1, &flushed_range)
+    mapped_data_ptr: rawptr = nil
+	if is_uniform_buffer { // Persistently map UBOs
+		map_result := vk.MapMemory(logical_device, device_memory, 0, mem_reqs.size, 0, &mapped_data_ptr)
+		if map_result != .SUCCESS || mapped_data_ptr == nil {
+			log.errorf("vkMapMemory failed for persistent mapping of UBO. Result: %v", map_result)
+            vk.FreeMemory(logical_device, device_memory, p_vk_allocator)
+            vk.DestroyBuffer(logical_device, buffer_handle, p_vk_allocator)
+            return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
+		}
+        log.debugf("Uniform Buffer %p persistently mapped to %p", buffer_handle, mapped_data_ptr)
+        // If initial_data is provided for UBO, copy it now to the persistently mapped pointer
+        if initial_data != nil {
+            mem.copy(mapped_data_ptr, initial_data, int(size_bytes))
+            // No unmap needed for persistently mapped coherent memory.
+        }
+	} else if initial_data != nil { // For non-UBOs with initial data (e.g. VBO/IBO)
+		// This path assumes HOST_VISIBLE memory for VBO/IBO for simplicity of initial data upload.
+        // If it were DEVICE_LOCAL, staging buffer would be needed here.
+        temp_mapped_ptr: rawptr
+		map_result := vk.MapMemory(logical_device, device_memory, 0, mem_reqs.size, 0, &temp_mapped_ptr)
+		if map_result == .SUCCESS && temp_mapped_ptr != nil {
+			mem.copy(temp_mapped_ptr, initial_data, int(size_bytes))
 			vk.UnmapMemory(logical_device, device_memory)
-			log.debug("Initial data uploaded and memory unmapped.")
 		} else {
-			log.errorf("vkMapMemory failed for initial data upload. Result: %v", map_result)
-			// Cleanup everything as upload failed
-			vk.FreeMemory(logical_device, device_memory, p_vk_allocator)
-			vk.DestroyBuffer(logical_device, buffer_handle, p_vk_allocator)
-			return gfx_interface.Gfx_Buffer{}, .Buffer_Creation_Failed
+			log.errorf("vkMapMemory failed for initial data upload to non-UBO. Result: %v", map_result)
+            vk.FreeMemory(logical_device, device_memory, p_vk_allocator)
+            vk.DestroyBuffer(logical_device, buffer_handle, p_vk_allocator)
+            return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
 		}
 	}
 
-	// 9. Store Buffer Info
-	vk_buffer_internal := new(Vk_Buffer_Internal, allocator)
-	vk_buffer_internal.buffer = buffer_handle
-	vk_buffer_internal.memory = device_memory
-	vk_buffer_internal.device_ref = vk_dev_internal
-	vk_buffer_internal.size = buffer_create_info.size // Store actual allocated size (could be mem_reqs.size)
-	vk_buffer_internal.allocator = allocator
-	vk_buffer_internal.mapped_ptr = nil // Not persistently mapped by default
 
-	log.infof("Vulkan buffer created and initialized: Gfx_Buffer wrapping Vk_Buffer_Internal %p (Buffer: %p, Memory: %p, Size: %v)",
-		vk_buffer_internal, buffer_handle, device_memory, vk_buffer_internal.size)
-	
-	return gfx_interface.Gfx_Buffer{variant = vk_buffer_internal}, .None
+	if is_uniform_buffer {
+		ubo_info := new(vk_types.Vk_Uniform_Buffer_Info, allocator)
+		ubo_info.buffer     = buffer_handle
+		ubo_info.memory     = device_memory
+		ubo_info.size       = mem_reqs.size
+        ubo_info.mapped_ptr = mapped_data_ptr // Store the persistently mapped pointer
+		ubo_info.device_ref = vk_dev_internal
+		ubo_info.allocator  = allocator
+		log.infof("Vulkan Uniform Buffer created: Gfx_Buffer wrapping Vk_Uniform_Buffer_Info %p", ubo_info)
+		return gfx_interface.Gfx_Buffer{variant = ubo_info}, .None
+	} else {
+		vk_buffer_internal := new(vk_types.Vk_Buffer_Internal, allocator)
+		vk_buffer_internal.buffer     = buffer_handle
+		vk_buffer_internal.memory     = device_memory
+		vk_buffer_internal.device_ref = vk_dev_internal
+		vk_buffer_internal.size       = mem_reqs.size
+		vk_buffer_internal.allocator  = allocator
+		vk_buffer_internal.mapped_ptr = nil // Not persistently mapped for VBO/IBO by default
+		log.infof("Vulkan Buffer created: Gfx_Buffer wrapping Vk_Buffer_Internal %p", vk_buffer_internal)
+		return gfx_interface.Gfx_Buffer{variant = vk_buffer_internal}, .None
+	}
 }
 
-// vk_destroy_buffer_internal destroys a Vulkan buffer and frees its memory.
 vk_destroy_buffer_internal :: proc(buffer_handle_gfx: gfx_interface.Gfx_Buffer) {
-	vk_buffer_ptr, ok_buf := buffer_handle_gfx.variant.(^Vk_Buffer_Internal)
-	if !ok_buf || vk_buffer_ptr == nil {
-		log.errorf("vk_destroy_buffer: Invalid Gfx_Buffer type or nil variant (%v).", buffer_handle_gfx.variant)
+    // Common cleanup logic for buffer and memory
+    destroy_buffer_and_memory :: proc(buffer: vk.Buffer, memory: vk.DeviceMemory, device: vk.Device, p_vk_allocator: ^vk.AllocationCallbacks) {
+        if buffer != vk.NULL_HANDLE {
+            vk.DestroyBuffer(device, buffer, p_vk_allocator)
+        }
+        if memory != vk.NULL_HANDLE {
+            vk.FreeMemory(device, memory, p_vk_allocator)
+        }
+    }
+
+	p_vk_allocator: ^vk.AllocationCallbacks = nil
+	
+    // Try to assert as ^Vk_Buffer_Internal first
+	if vk_buffer_ptr, ok_buf := buffer_handle_gfx.variant.(^vk_types.Vk_Buffer_Internal); ok_buf && vk_buffer_ptr != nil {
+		if vk_buffer_ptr.device_ref != nil && vk_buffer_ptr.device_ref.logical_device != vk.NULL_HANDLE {
+            logical_device := vk_buffer_ptr.device_ref.logical_device
+            // If it was mapped for non-UBO (not persistent), ensure unmap (though current map_buffer is temporary)
+            if vk_buffer_ptr.mapped_ptr != nil { // This implies a map call without unmap if not UBO
+                log.warnf("Vk_Buffer_Internal %p was still mapped during destruction. Unmapping now.", vk_buffer_ptr.buffer)
+                vk.UnmapMemory(logical_device, vk_buffer_ptr.memory)
+            }
+			destroy_buffer_and_memory(vk_buffer_ptr.buffer, vk_buffer_ptr.memory, logical_device, p_vk_allocator)
+			log.infof("Vk_Buffer_Internal %p destroyed.", vk_buffer_ptr)
+			free(vk_buffer_ptr, vk_buffer_ptr.allocator)
+		} else {
+            log.error("vk_destroy_buffer_internal: device_ref or logical_device is nil for Vk_Buffer_Internal.")
+        }
 		return
 	}
 
-	buffer_internal := vk_buffer_ptr^ // Dereference to get the struct
-	logical_device := buffer_internal.device_ref.logical_device
-	p_vk_allocator: ^vk.AllocationCallbacks = nil
-
-	// Ensure buffer is unmapped if it was persistently mapped (not current design, but good practice)
-	if buffer_internal.mapped_ptr != nil {
-		log.warnf("Buffer %p was still mapped during destruction. Unmapping now.", buffer_internal.buffer)
-		vk.UnmapMemory(logical_device, buffer_internal.memory)
-		// vk_buffer_ptr.mapped_ptr = nil // Not strictly needed as we are freeing vk_buffer_ptr
+    // Try to assert as ^Vk_Uniform_Buffer_Info
+	if ubo_info_ptr, ok_ubo := buffer_handle_gfx.variant.(^vk_types.Vk_Uniform_Buffer_Info); ok_ubo && ubo_info_ptr != nil {
+		if ubo_info_ptr.device_ref != nil && ubo_info_ptr.device_ref.logical_device != vk.NULL_HANDLE {
+            logical_device := ubo_info_ptr.device_ref.logical_device
+            if ubo_info_ptr.mapped_ptr != nil { // Persistently mapped
+                vk.UnmapMemory(logical_device, ubo_info_ptr.memory)
+                log.debugf("Unmapped persistently mapped UBO %p", ubo_info_ptr.buffer)
+            }
+			destroy_buffer_and_memory(ubo_info_ptr.buffer, ubo_info_ptr.memory, logical_device, p_vk_allocator)
+			log.infof("Vk_Uniform_Buffer_Info %p destroyed.", ubo_info_ptr)
+			free(ubo_info_ptr, ubo_info_ptr.allocator)
+		} else {
+            log.error("vk_destroy_buffer_internal: device_ref or logical_device is nil for Vk_Uniform_Buffer_Info.")
+        }
+		return
 	}
 
-	if buffer_internal.buffer != vk.NULL_HANDLE {
-		log.debugf("Destroying Vulkan Buffer: %p", buffer_internal.buffer)
-		vk.DestroyBuffer(logical_device, buffer_internal.buffer, p_vk_allocator)
-	}
-	if buffer_internal.memory != vk.NULL_HANDLE {
-		log.debugf("Freeing Vulkan DeviceMemory: %p", buffer_internal.memory)
-		vk.FreeMemory(logical_device, buffer_internal.memory, p_vk_allocator)
-	}
-	
-	log.infof("Vk_Buffer_Internal %p destroyed (Buffer: %p, Memory: %p)", 
-		vk_buffer_ptr, buffer_internal.buffer, buffer_internal.memory)
-	
-	// Free the Vk_Buffer_Internal struct itself
-	free(vk_buffer_ptr, buffer_internal.allocator)
+	log.errorf("vk_destroy_buffer_internal: Invalid Gfx_Buffer variant type (%T) or nil pointer.", buffer_handle_gfx.variant)
 }
 
-// vk_map_buffer_internal maps a Vulkan buffer's memory for CPU access.
+
 vk_map_buffer_internal :: proc(
 	buffer_handle_gfx: gfx_interface.Gfx_Buffer,
-	offset_bytes: int, // Renamed from offset
-	size_bytes: int,   // Renamed from size
+	offset_bytes: int, 
+	size_bytes: int,   
 ) -> rawptr {
-	vk_buffer_ptr, ok_buf := buffer_handle_gfx.variant.(^Vk_Buffer_Internal)
-	if !ok_buf || vk_buffer_ptr == nil {
-		log.errorf("vk_map_buffer: Invalid Gfx_Buffer type or nil variant (%v).", buffer_handle_gfx.variant)
-		return nil
-	}
-	buffer_internal := vk_buffer_ptr^
-	logical_device := buffer_internal.device_ref.logical_device
+    // Handle Vk_Buffer_Internal (typically for VBO/IBO, temporary mapping)
+	if vk_buffer_ptr, ok_buf := buffer_handle_gfx.variant.(^vk_types.Vk_Buffer_Internal); ok_buf && vk_buffer_ptr != nil {
+        if vk_buffer_ptr.device_ref == nil { log.error("vk_map_buffer: nil device_ref in Vk_Buffer_Internal"); return nil }
+        logical_device := vk_buffer_ptr.device_ref.logical_device
 
-	if buffer_internal.mapped_ptr != nil {
-		// This implies either persistent mapping (which we aren't fully set up for managing access)
-		// or a previous map call without a corresponding unmap.
-		log.warnf("Buffer %p is already mapped (or was mapped without unmap). Returning existing mapped pointer + offset.", buffer_internal.buffer)
-		return (^u8)(buffer_internal.mapped_ptr) + offset_bytes
-	}
-	
-	// Validate offset and size against buffer_internal.size
-	if offset_bytes < 0 || vk.DeviceSize(offset_bytes) >= buffer_internal.size {
-		log.errorf("vk_map_buffer: Invalid offset %d for buffer of size %v.", offset_bytes, buffer_internal.size)
-		return nil
-	}
-	map_size := vk.DeviceSize(size_bytes)
-	if size_bytes == -1 { // Convention for mapping whole buffer (or from offset to end)
-		map_size = buffer_internal.size - vk.DeviceSize(offset_bytes)
-	}
-	if vk.DeviceSize(offset_bytes) + map_size > buffer_internal.size {
-		log.warnf("vk_map_buffer: Requested map size (%d bytes from offset %d) exceeds buffer size (%v bytes). Clamping size.", 
-			size_bytes, offset_bytes, buffer_internal.size)
-		map_size = buffer_internal.size - vk.DeviceSize(offset_bytes)
-	}
-	if map_size == 0 {
-		log.warn("vk_map_buffer: Calculated map size is 0.")
-		return nil
+        if vk_buffer_ptr.mapped_ptr != nil { // Should not happen for non-persistent
+            log.warnf("Vk_Buffer_Internal %p already has a mapped_ptr. This indicates an issue or previous unmap was missed.", vk_buffer_ptr.buffer)
+            // return (^u8)(vk_buffer_ptr.mapped_ptr) + offset_bytes; // Risky, might be stale
+        }
+        
+        actual_offset := vk.DeviceSize(offset_bytes)
+        actual_size   := vk.DeviceSize(size_bytes)
+        if size_bytes == -1 { actual_size = vk_buffer_ptr.size - actual_offset }
+        // Basic validation
+        if actual_offset >= vk_buffer_ptr.size || actual_offset + actual_size > vk_buffer_ptr.size {
+            log.errorf("vk_map_buffer: Invalid map range for Vk_Buffer_Internal. Offset: %v, Size: %v, Buffer Size: %v", actual_offset, actual_size, vk_buffer_ptr.size)
+            return nil
+        }
+
+        mapped_data: rawptr
+        result := vk.MapMemory(logical_device, vk_buffer_ptr.memory, actual_offset, actual_size, 0, &mapped_data)
+        if result == .SUCCESS && mapped_data != nil {
+            vk_buffer_ptr.mapped_ptr = mapped_data // Store for unmap
+            return mapped_data
+        }
+        log.errorf("vkMapMemory failed for Vk_Buffer_Internal %p: %v", vk_buffer_ptr.buffer, result)
+        return nil
 	}
 
-	log.debugf("Mapping buffer %p (Memory: %p), Offset: %d, Size: %v", 
-		buffer_internal.buffer, buffer_internal.memory, offset_bytes, map_size)
-	
-	mapped_data_ptr: rawptr
-	result := vk.MapMemory(logical_device, buffer_internal.memory, vk.DeviceSize(offset_bytes), map_size, 0, &mapped_data_ptr)
-	
-	if result == .SUCCESS && mapped_data_ptr != nil {
-		// Store the base mapped pointer if we were to support persistent mapping checks.
-		// For now, map/unmap are treated as paired calls by the user for a specific operation.
-		// vk_buffer_ptr.mapped_ptr = mapped_data_ptr; // If we wanted to track the base of this specific map.
-		// However, `Gfx_Buffer` interface implies map gives a pointer, unmap takes no pointer.
-		// So, the `mapped_ptr` in `Vk_Buffer_Internal` is more for if the buffer itself is "globally" mapped.
-		// Let's assume vkMapMemory/vkUnmapMemory are always paired by the user of Gfx_Buffer.
-		// We can store the most recent mapped pointer to ensure unmap is called on that.
-		vk_buffer_ptr.mapped_ptr = mapped_data_ptr // Store the pointer returned by THIS map call.
-		log.debugf("Buffer %p mapped successfully. Pointer: %p", buffer_internal.buffer, mapped_data_ptr)
-		return mapped_data_ptr
-	} else {
-		log.errorf("vkMapMemory failed for buffer %p. Result: %v", buffer_internal.buffer, result)
-		return nil
-	}
+    // Handle Vk_Uniform_Buffer_Info (already persistently mapped)
+    if ubo_info_ptr, ok_ubo := buffer_handle_gfx.variant.(^vk_types.Vk_Uniform_Buffer_Info); ok_ubo && ubo_info_ptr != nil {
+        if ubo_info_ptr.mapped_ptr == nil {
+            log.errorf("Vk_Uniform_Buffer_Info %p is not mapped, but should be persistently mapped.", ubo_info_ptr.buffer)
+            return nil
+        }
+        // For persistently mapped UBOs, just return the mapped pointer + offset.
+        // Ensure requested range is valid.
+        actual_offset := vk.DeviceSize(offset_bytes)
+        actual_size   := vk.DeviceSize(size_bytes)
+        if size_bytes == -1 { actual_size = ubo_info_ptr.size - actual_offset }
+
+        if actual_offset >= ubo_info_ptr.size || actual_offset + actual_size > ubo_info_ptr.size {
+             log.errorf("vk_map_buffer: Invalid map range for Vk_Uniform_Buffer_Info. Offset: %v, Size: %v, Buffer Size: %v", actual_offset, actual_size, ubo_info_ptr.size)
+            return nil
+        }
+        return (^u8)(ubo_info_ptr.mapped_ptr) + int(actual_offset) // Pointer arithmetic
+    }
+
+	log.errorf("vk_map_buffer: Invalid Gfx_Buffer variant type (%T) or nil pointer.", buffer_handle_gfx.variant)
+	return nil
 }
 
-// vk_unmap_buffer_internal unmaps a previously mapped Vulkan buffer.
 vk_unmap_buffer_internal :: proc(buffer_handle_gfx: gfx_interface.Gfx_Buffer) {
-	vk_buffer_ptr, ok_buf := buffer_handle_gfx.variant.(^Vk_Buffer_Internal)
-	if !ok_buf || vk_buffer_ptr == nil {
-		log.errorf("vk_unmap_buffer: Invalid Gfx_Buffer type or nil variant (%v).", buffer_handle_gfx.variant)
-		return
-	}
-	buffer_internal := vk_buffer_ptr^
-	logical_device := buffer_internal.device_ref.logical_device
+    // Handle Vk_Buffer_Internal (temporary mapping)
+	if vk_buffer_ptr, ok_buf := buffer_handle_gfx.variant.(^vk_types.Vk_Buffer_Internal); ok_buf && vk_buffer_ptr != nil {
+        if vk_buffer_ptr.device_ref == nil { log.error("vk_unmap_buffer: nil device_ref in Vk_Buffer_Internal"); return }
+        logical_device := vk_buffer_ptr.device_ref.logical_device
 
-	// HOST_COHERENT memory doesn't strictly need flushing before unmap,
-	// but if it weren't coherent, vkFlushMappedMemoryRanges would be needed here before unmap.
-	// vk.UnmapMemory itself makes host writes visible to device.
-
-	if buffer_internal.mapped_ptr == nil && vk_buffer_ptr.mapped_ptr == nil { // Check both, struct might have been copied
-		log.warnf("vk_unmap_buffer called on buffer %p that was not mapped (or already unmapped).", buffer_internal.buffer)
-		return
+        if vk_buffer_ptr.mapped_ptr == nil {
+            log.warnf("vk_unmap_buffer called on Vk_Buffer_Internal %p that was not mapped or already unmapped.", vk_buffer_ptr.buffer)
+            return
+        }
+        vk.UnmapMemory(logical_device, vk_buffer_ptr.memory)
+        vk_buffer_ptr.mapped_ptr = nil 
+        return
 	}
-	
-	log.debugf("Unmapping buffer %p (Memory: %p)", buffer_internal.buffer, buffer_internal.memory)
-	vk.UnmapMemory(logical_device, buffer_internal.memory)
-	vk_buffer_ptr.mapped_ptr = nil // Clear the stored mapped pointer
-	log.debug("Buffer unmapped successfully.")
+
+    // Handle Vk_Uniform_Buffer_Info (persistently mapped, unmap is a no-op from user perspective)
+    if ubo_info_ptr, ok_ubo := buffer_handle_gfx.variant.(^vk_types.Vk_Uniform_Buffer_Info); ok_ubo && ubo_info_ptr != nil {
+        // Persistently mapped buffers are typically unmapped only on destruction.
+        // This call can be a no-op or log a warning if called explicitly by user on a UBO.
+        log.debugf("vk_unmap_buffer called on persistently mapped Vk_Uniform_Buffer_Info %p. No explicit unmap action taken here.", ubo_info_ptr.buffer)
+        return
+    }
+
+	log.errorf("vk_unmap_buffer: Invalid Gfx_Buffer variant type (%T) or nil pointer.", buffer_handle_gfx.variant)
+}
+
+
+// vk_update_buffer_internal updates a region of a Vulkan buffer.
+// For UBOs, this means copying to the persistently mapped pointer.
+// For other buffers, it uses a temporary map if HOST_VISIBLE, otherwise would need staging.
+// Current implementation assumes HOST_VISIBLE for simplicity if not UBO.
+vk_update_buffer_internal :: proc(
+    buffer_handle_gfx: gfx_interface.Gfx_Buffer, 
+    offset: int, 
+    data: rawptr, 
+    size: int,
+) -> common.Engine_Error {
+    if data == nil || size <= 0 { return common.Engine_Error.Invalid_Parameter }
+
+    // Handle Vk_Uniform_Buffer_Info (persistently mapped)
+    if ubo_info, ok_ubo := buffer_handle_gfx.variant.(^vk_types.Vk_Uniform_Buffer_Info); ok_ubo && ubo_info != nil {
+        if ubo_info.mapped_ptr == nil {
+            log.errorf("Vk_Uniform_Buffer_Info %p is not mapped. Cannot update.", ubo_info.buffer)
+            return common.Engine_Error.Invalid_Operation // Should have been mapped on creation
+        }
+        if offset < 0 || vk.DeviceSize(offset + size) > ubo_info.size {
+            log.errorf("Update region out of bounds for UBO %p.", ubo_info.buffer)
+            return common.Engine_Error.Invalid_Parameter
+        }
+        dst_ptr := (^u8)(ubo_info.mapped_ptr) + offset
+        mem.copy(dst_ptr, data, size)
+        // No flush needed due to HOST_COHERENT memory property.
+        return .None
+    }
+
+    // Handle Vk_Buffer_Internal (temporary map for update)
+    if vk_buffer, ok_buf := buffer_handle_gfx.variant.(^vk_types.Vk_Buffer_Internal); ok_buf && vk_buffer != nil {
+        if vk_buffer.device_ref == nil { return common.Engine_Error.Invalid_Handle }
+        logical_device := vk_buffer.device_ref.logical_device
+
+        if offset < 0 || vk.DeviceSize(offset + size) > vk_buffer.size {
+             log.errorf("Update region out of bounds for buffer %p.", vk_buffer.buffer)
+            return common.Engine_Error.Invalid_Parameter
+        }
+        
+        // Assuming HOST_VISIBLE and HOST_COHERENT for simplicity for non-UBOs too
+        mapped_ptr: rawptr
+        map_res := vk.MapMemory(logical_device, vk_buffer.memory, vk.DeviceSize(offset), vk.DeviceSize(size), 0, &mapped_ptr)
+        if map_res != .SUCCESS || mapped_ptr == nil {
+            log.errorf("Failed to map buffer %p for update: %v", vk_buffer.buffer, map_res)
+            return common.Engine_Error.Vulkan_Error
+        }
+        mem.copy(mapped_ptr, data, size)
+        vk.UnmapMemory(logical_device, vk_buffer.memory)
+        return .None
+    }
+    
+    log.errorf("vk_update_buffer_internal: Invalid Gfx_Buffer variant type (%T) or nil pointer.", buffer_handle_gfx.variant)
+    return common.Engine_Error.Invalid_Handle
 }

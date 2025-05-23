@@ -1,5 +1,6 @@
 package graphics
 
+import "../common" // For common.Engine_Error
 import "core:log"
 import "core:strings"
 import "core:math"
@@ -28,7 +29,7 @@ Font :: struct {
 
 // load_default_font creates a simple bitmap font using the default white texture
 // For a real game, you would load a proper font texture and metrics
-load_default_font :: proc(device: Gfx_Device, char_width, char_height: int) -> (^Font, Gfx_Error) {
+load_default_font :: proc(device: Gfx_Device, char_width, char_height: int) -> (^Font, common.Engine_Error) {
     font := new(Font)
     
     // Use the default white texture as a fallback
@@ -63,7 +64,7 @@ load_default_font :: proc(device: Gfx_Device, char_width, char_height: int) -> (
         }
     }
     
-    return font, .None
+    return font, common.Engine_Error.None
 }
 
 // destroy_font cleans up font resources

@@ -35,7 +35,7 @@ create_shader_from_source_impl :: proc(
     device: gfx_interface.Gfx_Device,
     source: string,
     stage: gfx_interface.Shader_Stage,
-) -> (gfx_interface.Gfx_Shader, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Shader, common.Engine_Error) {
     shader_type: Shader_Type
     
     switch stage {
@@ -47,13 +47,13 @@ create_shader_from_source_impl :: proc(
         shader_type = .Compute
     case:
         log.errorf("Unsupported shader stage: %v", stage)
-        return gfx_interface.Gfx_Shader{}, .Shader_Compilation_Failed
+        return gfx_interface.Gfx_Shader{}, common.Engine_Error.Shader_Compilation_Failed
     }
     
     shader_id := gl.CreateShader(cast(u32)shader_type)
     if shader_id == 0 {
         log.error("Failed to create shader")
-        return gfx_interface.Gfx_Shader{}, .Shader_Compilation_Failed
+        return gfx_interface.Gfx_Shader{}, common.Engine_Error.Shader_Compilation_Failed
     }
     
     // Convert Odin string to C string for OpenGL
@@ -81,7 +81,7 @@ create_shader_from_source_impl :: proc(
         }
         
         gl.DeleteShader(shader_id)
-        return gfx_interface.Gfx_Shader{}, .Shader_Compilation_Failed
+        return gfx_interface.Gfx_Shader{}, common.Engine_Error.Shader_Compilation_Failed
     }
     
     // Create shader stage
@@ -98,11 +98,11 @@ create_shader_from_bytecode_impl :: proc(
     device: gfx_interface.Gfx_Device,
     bytecode: []u8,
     stage: gfx_interface.Shader_Stage,
-) -> (gfx_interface.Gfx_Shader, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Shader, common.Engine_Error) {
     // Note: OpenGL doesn't support precompiled shader bytecode in the same way as other APIs.
     // We'll just convert the bytecode to a string and compile it as source.
     if len(bytecode) == 0 {
-        return gfx_interface.Gfx_Shader{}, .Shader_Compilation_Failed
+        return gfx_interface.Gfx_Shader{}, common.Engine_Error.Shader_Compilation_Failed
     }
     
     source := string(bytecode)
@@ -124,15 +124,15 @@ destroy_shader_impl :: proc(shader: gfx_interface.Gfx_Shader) {
 create_pipeline_impl :: proc(
     device: gfx_interface.Gfx_Device,
     shaders: []gfx_interface.Gfx_Shader,
-) -> (gfx_interface.Gfx_Pipeline, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Pipeline, common.Engine_Error) {
     if len(shaders) == 0 {
-        return gfx_interface.Gfx_Pipeline{}, .Shader_Compilation_Failed
+        return gfx_interface.Gfx_Pipeline{}, common.Engine_Error.Shader_Compilation_Failed
     }
     
     // Create program
     program_id := gl.CreateProgram()
     if program_id == 0 {
-        return gfx_interface.Gfx_Pipeline{}, .Shader_Compilation_Failed
+        return gfx_interface.Gfx_Pipeline{}, common.Engine_Error.Shader_Compilation_Failed
     }
     
     // Attach shaders
@@ -174,7 +174,7 @@ create_pipeline_impl :: proc(
         delete(program.uniforms)
         free(program)
         
-        return gfx_interface.Gfx_Pipeline{}, .Shader_Compilation_Failed
+        return gfx_interface.Gfx_Pipeline{}, common.Engine_Error.Shader_Compilation_Failed
     }
     
     // Detach shaders (they're linked now)
@@ -198,7 +198,7 @@ destroy_pipeline_impl :: proc(pipeline: gfx_interface.Gfx_Pipeline) {
     }
 }
 
-set_pipeline_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline) -> gfx_interface.Gfx_Error {
+set_pipeline_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline) -> common.Engine_Error {
     if program, ok := pipeline.variant.(^Shader_Program); ok && program.is_linked {
         gl.UseProgram(program.id)
         return .None
@@ -208,7 +208,7 @@ set_pipeline_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interf
 
 // --- Uniforms ---
 
-set_uniform_mat4_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, mat: matrix[4, 4]f32) -> gfx_interface.Gfx_Error {
+set_uniform_mat4_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, mat: matrix[4, 4]f32) -> common.Engine_Error {
     if program, ok := pipeline.variant.(^Shader_Program); ok && program.is_linked {
         location := get_uniform_location(program, name)
         if location >= 0 {
@@ -219,7 +219,7 @@ set_uniform_mat4_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_in
     return .Invalid_Handle
 }
 
-set_uniform_vec2_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, vec: [2]f32) -> gfx_interface.Gfx_Error {
+set_uniform_vec2_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, vec: [2]f32) -> common.Engine_Error {
     if program, ok := pipeline.variant.(^Shader_Program); ok && program.is_linked {
         location := get_uniform_location(program, name)
         if location >= 0 {
@@ -230,7 +230,7 @@ set_uniform_vec2_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_in
     return .Invalid_Handle
 }
 
-set_uniform_vec3_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, vec: [3]f32) -> gfx_interface.Gfx_Error {
+set_uniform_vec3_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, vec: [3]f32) -> common.Engine_Error {
     if program, ok := pipeline.variant.(^Shader_Program); ok && program.is_linked {
         location := get_uniform_location(program, name)
         if location >= 0 {
@@ -241,7 +241,7 @@ set_uniform_vec3_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_in
     return .Invalid_Handle
 }
 
-set_uniform_vec4_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, vec: [4]f32) -> gfx_interface.Gfx_Error {
+set_uniform_vec4_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, vec: [4]f32) -> common.Engine_Error {
     if program, ok := pipeline.variant.(^Shader_Program); ok && program.is_linked {
         location := get_uniform_location(program, name)
         if location >= 0 {
@@ -252,7 +252,7 @@ set_uniform_vec4_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_in
     return .Invalid_Handle
 }
 
-set_uniform_int_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, value: i32) -> gfx_interface.Gfx_Error {
+set_uniform_int_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, value: i32) -> common.Engine_Error {
     if program, ok := pipeline.variant.(^Shader_Program); ok && program.is_linked {
         location := get_uniform_location(program, name)
         if location >= 0 {
@@ -263,7 +263,7 @@ set_uniform_int_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_int
     return .Invalid_Handle
 }
 
-set_uniform_float_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, value: f32) -> gfx_interface.Gfx_Error {
+set_uniform_float_impl :: proc(device: gfx_interface.Gfx_Device, pipeline: gfx_interface.Gfx_Pipeline, name: string, value: f32) -> common.Engine_Error {
     if program, ok := pipeline.variant.(^Shader_Program); ok && program.is_linked {
         location := get_uniform_location(program, name)
         if location >= 0 {

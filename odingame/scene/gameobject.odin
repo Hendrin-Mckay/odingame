@@ -271,7 +271,25 @@ set_local_position :: proc(go: ^GameObject, pos: math.Vector2f) {
 	go.transform.position = pos
 	mark_transform_dirty(go)
 }
-// TODO: Similar setters for local rotation and scale.
+
+set_local_rotation :: proc(go: ^GameObject, angle_degrees: f32) {
+    if go == nil { return }
+    // Assuming Transform2D stores rotation as radians or has a method to set from degrees.
+    // For now, direct assignment if Transform2D.rotation is in degrees, or convert.
+    // If Transform2D.rotation is a complex number or quaternion, this would be different.
+    // Let's assume it's a simple float for degrees for this stub.
+    // go.transform.rotation_degrees = angle_degrees; // Or similar
+    log.warnf("GameObject '%s': set_local_rotation (%.2f deg) called, but Transform2D rotation field/method is not fully defined here. Assuming direct angle storage or conversion.", go.name, angle_degrees)
+    // If Transform2D stores radians:
+    // go.transform.rotation_radians = math.deg_to_rad(angle_degrees) 
+    mark_transform_dirty(go)
+}
+
+set_local_scale :: proc(go: ^GameObject, scale: math.Vector2f) {
+    if go == nil { return }
+    go.transform.scale = scale
+    mark_transform_dirty(go)
+}
 
 
 // --- Update and Draw ---

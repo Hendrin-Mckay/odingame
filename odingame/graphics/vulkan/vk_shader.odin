@@ -3,7 +3,8 @@ package vulkan
 import vk "vendor:vulkan"
 import "core:log"
 import "core:mem"
-import "../gfx_interface" // For Gfx_Device, Gfx_Error, Gfx_Shader, Shader_Stage
+import "../gfx_interface" // For Gfx_Device, Gfx_Shader, Shader_Stage
+import "../../common" // For common.Engine_Error
 
 // Vk_Shader_Internal holds the Vulkan-specific shader data.
 Vk_Shader_Internal :: struct {
@@ -30,14 +31,14 @@ map_shader_stage_to_vk :: proc(stage: gfx_interface.Shader_Stage) -> (vk.ShaderS
 
 // vk_create_shader_module creates a Vulkan shader module from SPIR-V bytecode.
 // Assumes bytecode is valid SPIR-V.
-vk_create_shader_module_internal :: proc(logical_device: vk.Device, bytecode: []u8) -> (vk.ShaderModule, gfx_interface.Gfx_Error) {
+vk_create_shader_module_internal :: proc(logical_device: vk.Device, bytecode: []u8) -> (vk.ShaderModule, common.Engine_Error) {
 	if len(bytecode) == 0 {
 		log.error("Shader bytecode is empty.")
-		return vk.NULL_HANDLE, .Shader_Compilation_Failed // Or a more specific error
+		return vk.NULL_HANDLE, common.Engine_Error.Shader_Compilation_Failed // Or a more specific error
 	}
 	if len(bytecode) % 4 != 0 {
 		log.error("Shader bytecode size is not a multiple of 4.")
-		return vk.NULL_HANDLE, .Shader_Compilation_Failed
+		return vk.NULL_HANDLE, common.Engine_Error.Shader_Compilation_Failed
 	}
 
 	create_info := vk.ShaderModuleCreateInfo{
@@ -55,7 +56,7 @@ vk_create_shader_module_internal :: proc(logical_device: vk.Device, bytecode: []
 	if result != .SUCCESS {
 		log.errorf("vkCreateShaderModule failed. Result: %v (%d)", result, int(result))
 		// Log more details if possible, e.g., from validation layers if they provide info
-		return vk.NULL_HANDLE, .Shader_Compilation_Failed
+		return vk.NULL_HANDLE, common.Engine_Error.Shader_Compilation_Failed
 	}
 
 	log.infof("Vulkan Shader Module created successfully: %p", shader_module)
@@ -67,19 +68,19 @@ vk_create_shader_from_bytecode_internal :: proc(
 	gfx_device: gfx_interface.Gfx_Device,
 	bytecode: []u8,
 	stage: gfx_interface.Shader_Stage,
-) -> (gfx_interface.Gfx_Shader, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Shader, common.Engine_Error) {
 	
 	vk_dev_internal, ok_dev := gfx_device.variant.(Vk_Device_Variant)
 	if !ok_dev || vk_dev_internal == nil {
 		log.error("vk_create_shader_from_bytecode: Invalid Gfx_Device (not Vulkan or nil variant).")
-		return gfx_interface.Gfx_Shader{}, .Invalid_Handle
+		return gfx_interface.Gfx_Shader{}, common.Engine_Error.Invalid_Handle
 	}
 
 	allocator := vk_dev_internal.allocator // Use device's allocator
 
 	vk_stage, ok_stage := map_shader_stage_to_vk(stage)
 	if !ok_stage {
-		return gfx_interface.Gfx_Shader{}, .Shader_Compilation_Failed // Or a more specific error like .Invalid_Stage
+		return gfx_interface.Gfx_Shader{}, common.Engine_Error.Shader_Compilation_Failed // Or a more specific error like .Invalid_Stage
 	}
 
 	shader_module, err := vk_create_shader_module_internal(vk_dev_internal.logical_device, bytecode)
@@ -134,12 +135,12 @@ vk_create_shader_from_source_internal :: proc(
     gfx_device: gfx_interface.Gfx_Device,
     glsl_source: string,
     shader_stage_gfx: gfx_interface.Shader_Stage,
-) -> (gfx_interface.Gfx_Shader, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Shader, common.Engine_Error) {
 
 	vk_dev_internal, ok_dev := gfx_device.variant.(Vk_Device_Variant)
 	if !ok_dev || vk_dev_internal == nil {
 		log.error("vk_create_shader_from_source: Invalid Gfx_Device.")
-		return gfx_interface.Gfx_Shader{}, .Invalid_Handle
+		return gfx_interface.Gfx_Shader{}, common.Engine_Error.Invalid_Handle
 	}
 	allocator := vk_dev_internal.allocator
 
@@ -147,14 +148,14 @@ vk_create_shader_from_source_internal :: proc(
 	compiler := shaderc.compiler_initialize()
 	if compiler == nil {
 		log.error("Failed to initialize shaderc compiler.")
-		return gfx_interface.Gfx_Shader{}, .Shader_Compilation_Failed
+		return gfx_interface.Gfx_Shader{}, common.Engine_Error.Shader_Compilation_Failed
 	}
 	defer shaderc.compiler_release(compiler)
 
 	options := shaderc.compile_options_initialize()
 	if options == nil {
 		log.error("Failed to initialize shaderc compile options.")
-		return gfx_interface.Gfx_Shader{}, .Shader_Compilation_Failed
+		return gfx_interface.Gfx_Shader{}, common.Engine_Error.Shader_Compilation_Failed
 	}
 	defer shaderc.compile_options_release(options)
 
@@ -170,7 +171,7 @@ vk_create_shader_from_source_internal :: proc(
 	shader_kind_sc, ok_kind := map_gfx_stage_to_shaderc_kind(shader_stage_gfx)
 	if !ok_kind {
 		log.errorf("Unsupported shader stage for shaderc compilation: %v", shader_stage_gfx)
-		return gfx_interface.Gfx_Shader{}, .Shader_Compilation_Failed
+		return gfx_interface.Gfx_Shader{}, common.Engine_Error.Shader_Compilation_Failed
 	}
 
 	// 3. Compile GLSL to SPIR-V
@@ -217,7 +218,7 @@ vk_create_shader_from_source_internal :: proc(
 		if error_msg_cstr != nil {
 			log.error(string(error_msg_cstr))
 		}
-		return gfx_interface.Gfx_Shader{}, .Shader_Compilation_Failed
+		return gfx_interface.Gfx_Shader{}, common.Engine_Error.Shader_Compilation_Failed
 	}
 
 	log.info("Shaderc compilation successful.")
@@ -228,7 +229,7 @@ vk_create_shader_from_source_internal :: proc(
 
 	if bytecode_ptr == nil || bytecode_len == 0 {
 		log.error("Shaderc compilation succeeded but returned no bytecode.")
-		return gfx_interface.Gfx_Shader{}, .Shader_Compilation_Failed
+		return gfx_interface.Gfx_Shader{}, common.Engine_Error.Shader_Compilation_Failed
 	}
 
 	// Create an Odin slice from the raw SPIR-V bytecode.

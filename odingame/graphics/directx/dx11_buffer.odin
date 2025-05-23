@@ -1,6 +1,7 @@
 package directx11
 
 import "../gfx_interface"
+import "../../common" // For common.Engine_Error
 import "core:log"
 import "core:mem"
 
@@ -12,22 +13,22 @@ create_buffer_impl :: proc(
     size: int,
     data: rawptr = nil,
     dynamic: bool = false,
-) -> (gfx_interface.Gfx_Buffer, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Buffer, common.Engine_Error) {
     log.warn("DirectX 11: create_buffer_impl not implemented")
     // Real implementation would:
     // 1. Create a D3D11_BUFFER_DESC with the appropriate usage and bind flags
     // 2. Create a D3D11_SUBRESOURCE_DATA if initial data is provided
     // 3. Call CreateBuffer on the device
     // 4. Store the buffer and description in D3D11_Buffer_Internal
-    return gfx_interface.Gfx_Buffer{}, .Not_Implemented
+    return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Not_Implemented
 }
 
-update_buffer_impl :: proc(buffer: gfx_interface.Gfx_Buffer, offset: int, data: rawptr, size: int) -> gfx_interface.Gfx_Error {
+update_buffer_impl :: proc(buffer: gfx_interface.Gfx_Buffer, offset: int, data: rawptr, size: int) -> common.Engine_Error {
     log.warn("DirectX 11: update_buffer_impl not implemented")
     // Real implementation would:
     // 1. Get the device context
     // 2. Call Map/Unmap or UpdateSubresource to update the buffer
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }
 
 destroy_buffer_impl :: proc(buffer: gfx_interface.Gfx_Buffer) {
@@ -39,19 +40,19 @@ destroy_buffer_impl :: proc(buffer: gfx_interface.Gfx_Buffer) {
     }
 }
 
-map_buffer_impl :: proc(buffer: gfx_interface.Gfx_Buffer, offset: int, size: int, read: bool, write: bool) -> (rawptr, gfx_interface.Gfx_Error) {
+map_buffer_impl :: proc(buffer: gfx_interface.Gfx_Buffer, offset: int, size: int, read: bool, write: bool) -> (rawptr, common.Engine_Error) {
     log.warn("DirectX 11: map_buffer_impl not implemented")
     // Real implementation would:
     // 1. Call Map on the device context with the appropriate flags
     // 2. Return the mapped pointer
-    return nil, .Not_Implemented
+    return nil, common.Engine_Error.Not_Implemented
 }
 
-unmap_buffer_impl :: proc(buffer: gfx_interface.Gfx_Buffer) -> gfx_interface.Gfx_Error {
+unmap_buffer_impl :: proc(buffer: gfx_interface.Gfx_Buffer) -> common.Engine_Error {
     log.warn("DirectX 11: unmap_buffer_impl not implemented")
     // Real implementation would:
     // 1. Call Unmap on the device context
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }
 
 // --- Vertex/Index Buffer Binding ---
@@ -62,12 +63,12 @@ set_vertex_buffer_impl :: proc(
     binding_index: u32 = 0,
     offset: u32 = 0,
     stride: u32 = 0,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     log.warn("DirectX 11: set_vertex_buffer_impl not implemented")
     // Real implementation would:
     // 1. Get the device context
     // 2. Call IASetVertexBuffers with the buffer and stride
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }
 
 set_index_buffer_impl :: proc(
@@ -75,10 +76,10 @@ set_index_buffer_impl :: proc(
     buffer: gfx_interface.Gfx_Buffer,
     offset: u32 = 0,
     index_type: gfx_interface.Index_Type = .U16,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     log.warn("DirectX 11: set_index_buffer_impl not implemented")
     // Real implementation would:
     // 1. Get the device context
     // 2. Call IASetIndexBuffer with the buffer and format
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }

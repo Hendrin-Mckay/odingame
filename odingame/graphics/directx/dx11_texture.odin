@@ -1,6 +1,7 @@
 package directx11
 
 import "../gfx_interface"
+import "../../common" // For common.Engine_Error
 import "core:log"
 import "core:mem"
 
@@ -12,7 +13,7 @@ create_texture_impl :: proc(
     format: gfx_interface.Texture_Format,
     usage: gfx_interface.Texture_Usage,
     data: rawptr = nil,
-) -> (gfx_interface.Gfx_Texture, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Texture, common.Engine_Error) {
     log.warn("DirectX 11: create_texture_impl not implemented")
     // Real implementation would:
     // 1. Create a D3D11_TEXTURE2D_DESC with the specified parameters
@@ -20,19 +21,19 @@ create_texture_impl :: proc(
     // 3. Call CreateTexture2D on the device
     // 4. Create a shader resource view for the texture
     // 5. Store the texture and SRV in D3D11_Texture_Internal
-    return gfx_interface.Gfx_Texture{}, .Not_Implemented
+    return gfx_interface.Gfx_Texture{}, common.Engine_Error.Not_Implemented
 }
 
 update_texture_impl :: proc(
     texture: gfx_interface.Gfx_Texture,
     x, y, width, height: int,
     data: rawptr,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     log.warn("DirectX 11: update_texture_impl not implemented")
     // Real implementation would:
     // 1. Get the device context
     // 2. Call UpdateSubresource or Map/Unmap to update the texture
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }
 
 destroy_texture_impl :: proc(texture: gfx_interface.Gfx_Texture) {
@@ -49,12 +50,12 @@ bind_texture_to_unit_impl :: proc(
     device: gfx_interface.Gfx_Device,
     texture: gfx_interface.Gfx_Texture,
     unit: u32,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     log.warn("DirectX 11: bind_texture_to_unit_impl not implemented")
     // Real implementation would:
     // 1. Get the device context
     // 2. Call PSSetShaderResources or VSSetShaderResources with the SRV
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }
 
 get_texture_width_impl :: proc(texture: gfx_interface.Gfx_Texture) -> int {

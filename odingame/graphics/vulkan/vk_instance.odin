@@ -6,12 +6,13 @@ import "core:os"
 import "core:fmt"
 import "core:strings"
 import "core:mem"
+import "../../common" // For common.Engine_Error
 // No direct import of vk_types here, but it's part of the same 'vulkan' package.
 // vk_helpers is also part of this package.
 
 // vk_create_instance_internal creates a Vulkan instance.
 // It handles application info, validation layers, and required extensions.
-vk_create_instance_internal :: proc(app_name: string, engine_name: string, allocator: mem.Allocator) -> (^Vk_Instance_Info, gfx_interface.Gfx_Error) {
+vk_create_instance_internal :: proc(app_name: string, engine_name: string, allocator: mem.Allocator) -> (^Vk_Instance_Info, common.Engine_Error) {
 	
 	// --- Application Info ---
 	app_info := vk.ApplicationInfo{
@@ -38,7 +39,7 @@ vk_create_instance_internal :: proc(app_name: string, engine_name: string, alloc
 	required_extensions_odin, ok_ext := get_required_instance_extensions(allocator)
 	if !ok_ext {
 		log.error("Failed to get required Vulkan instance extensions.")
-		return nil, .Initialization_Failed
+		return nil, common.Engine_Error.Graphics_Initialization_Failed
 	}
 	defer delete(required_extensions_odin) // Free the slice of Odin strings
 
@@ -85,7 +86,7 @@ vk_create_instance_internal :: proc(app_name: string, engine_name: string, alloc
 	if ENABLE_VALIDATION_LAYERS {
 		if !check_validation_layer_support() {
 			log.error("Requested validation layers not available.")
-			return nil, .Initialization_Failed // Or a more specific error like .Validation_Layers_Not_Supported
+			return nil, common.Engine_Error.Graphics_Initialization_Failed // Or a more specific error like .Validation_Layers_Not_Supported
 		}
 		// Convert VALIDATION_LAYERS (slice of Odin strings) to array of cstrings
 		enabled_layer_count := u32(len(VALIDATION_LAYERS))
@@ -130,7 +131,7 @@ vk_create_instance_internal :: proc(app_name: string, engine_name: string, alloc
 		log.errorf("vkCreateInstance failed. Result: %v (%d)", result, int(result))
 		// It's possible the error was related to pNext if debug_utils wasn't enabled but create_info was passed.
 		// If debug_utils is an extension, it must be in enabled_extension_names_c.
-		return nil, .Initialization_Failed
+		return nil, common.Engine_Error.Graphics_Initialization_Failed
 	}
 	log.info("Vulkan Instance created successfully.")
 

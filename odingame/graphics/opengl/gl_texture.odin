@@ -1,6 +1,7 @@
 package opengl
 
 import "../gfx_interface"
+import "../../common" // For common.Engine_Error
 import "core:log"
 import "core:mem"
 import "core:os"
@@ -52,7 +53,7 @@ create_texture_impl :: proc(
     format: gfx_interface.Texture_Format,
     usage: gfx_interface.Texture_Usage,
     data: rawptr = nil,
-) -> (gfx_interface.Gfx_Texture, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Texture, common.Engine_Error) {
     // Convert format
     texture_format: Texture_Format
     switch format {
@@ -60,14 +61,14 @@ create_texture_impl :: proc(
     case .RGB8: texture_format = .RGB8
     case .RGBA8, .SRGBA8: texture_format = .RGBA8
     case .Depth24_Stencil8: texture_format = .Depth24_Stencil8
-    case:       return gfx_interface.Gfx_Texture{}, .Texture_Creation_Failed
+    case:       return gfx_interface.Gfx_Texture{}, common.Engine_Error.Texture_Creation_Failed
     }
     
     // Create texture
     var texture_id: u32
     gl.GenTextures(1, &texture_id)
     if texture_id == 0 {
-        return gfx_interface.Gfx_Texture{}, .Texture_Creation_Failed
+        return gfx_interface.Gfx_Texture{}, common.Engine_Error.Texture_Creation_Failed
     }
     
     // Bind and configure texture
@@ -139,7 +140,7 @@ update_texture_impl :: proc(
     x, y, width, height: int,
     format: gfx_interface.Texture_Format,
     data: rawptr,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     if tex, ok := texture.variant.(^Texture); ok {
         gl.BindTexture(gl.TEXTURE_2D, tex.id)
         
@@ -151,7 +152,7 @@ update_texture_impl :: proc(
         case .R8:   pixel_format = gl.RED
         case .RGB8: pixel_format = gl.RGB
         case .RGBA8, .SRGBA8: pixel_format = gl.RGBA
-        case: return .Texture_Creation_Failed
+        case: return common.Engine_Error.Texture_Creation_Failed
         }
         
         gl.TexSubImage2D(
@@ -167,7 +168,7 @@ update_texture_impl :: proc(
         
         return .None
     }
-    return .Invalid_Handle
+    return common.Engine_Error.Invalid_Handle
 }
 
 destroy_texture_impl :: proc(texture: gfx_interface.Gfx_Texture) {
@@ -183,13 +184,13 @@ bind_texture_to_unit_impl :: proc(
     device: gfx_interface.Gfx_Device,
     texture: gfx_interface.Gfx_Texture,
     unit: u32,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     if tex, ok := texture.variant.(^Texture); ok {
         gl.ActiveTexture(gl.TEXTURE0 + unit)
         gl.BindTexture(gl.TEXTURE_2D, tex.id)
         return .None
     }
-    return .Invalid_Handle
+    return common.Engine_Error.Invalid_Handle
 }
 
 // --- Texture Properties ---
@@ -214,12 +215,12 @@ load_texture_from_file :: proc(
     device: gfx_interface.Gfx_Device,
     filepath: string,
     generate_mipmaps: bool = true,
-) -> (gfx_interface.Gfx_Texture, gfx_interface.Gfx_Error) {
+) -> (gfx_interface.Gfx_Texture, common.Engine_Error) {
     // Load image file
     img, err := image.load(filepath)
     if err != .None {
         log.errorf("Failed to load image: %s", filepath)
-        return gfx_interface.Gfx_Texture{}, .Texture_Creation_Failed
+        return gfx_interface.Gfx_Texture{}, common.Engine_Error.Texture_Creation_Failed
     }
     defer image.destroy(img)
     
@@ -227,7 +228,7 @@ load_texture_from_file :: proc(
     rgba_img, ok := image.to_rgba(img)
     if !ok {
         log.errorf("Failed to convert image to RGBA: %s", filepath)
-        return gfx_interface.Gfx_Texture{}, .Texture_Creation_Failed
+        return gfx_interface.Gfx_Texture{}, common.Engine_Error.Texture_Creation_Failed
     }
     defer image.destroy(rgba_img)
     

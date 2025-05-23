@@ -1,6 +1,7 @@
 package directx11
 
 import "../gfx_interface"
+import "../../common" // For common.Engine_Error
 import "core:log"
 
 // --- Drawing ---
@@ -11,12 +12,12 @@ draw_impl :: proc(
     first_vertex: i32 = 0,
     instance_count: i32 = 1,
     first_instance: i32 = 0,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     log.warn("DirectX 11: draw_impl not implemented")
     // Real implementation would:
     // 1. Get the device context
     // 2. Call Draw or DrawInstanced with the specified parameters
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }
 
 draw_indexed_impl :: proc(
@@ -26,10 +27,10 @@ draw_indexed_impl :: proc(
     base_vertex: i32 = 0,
     instance_count: i32 = 1,
     first_instance: i32 = 0,
-) -> gfx_interface.Gfx_Error {
+) -> common.Engine_Error {
     log.warn("DirectX 11: draw_indexed_impl not implemented")
     // Real implementation would:
     // 1. Get the device context
     // 2. Call DrawIndexed or DrawIndexedInstanced with the specified parameters
-    return .Not_Implemented
+    return common.Engine_Error.Not_Implemented
 }

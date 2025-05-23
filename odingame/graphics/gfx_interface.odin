@@ -1,15 +1,60 @@
 package graphics
 
+import "../common" // For Engine_Error
+import "../types" // For common types like Vector2, Color, etc.
+import "core:math"
+
+// DEPRECATED: This enum is being phased out in favor of common.Engine_Error
+// New code should use common.Engine_Error directly
+// This will be removed in a future version
+@(deprecated="Use common.Engine_Error instead")
 Gfx_Error :: enum {
-	None,
-	Initialization_Failed,
-	Device_Creation_Failed,
-	Window_Creation_Failed,
-	Shader_Compilation_Failed,
-	Buffer_Creation_Failed,
-	Texture_Creation_Failed,
-	Invalid_Handle,
-	Not_Implemented,
+	None,                   // No error occurred
+	Initialization_Failed,  // Graphics system initialization failed
+	Device_Creation_Failed, // Graphics device creation failed
+	Window_Creation_Failed, // Window creation failed
+	Shader_Compilation_Failed, // Shader compilation failed
+	Buffer_Creation_Failed, // Buffer creation failed
+	Texture_Creation_Failed, // Texture creation failed
+	Invalid_Handle,        // Invalid graphics handle
+	Not_Implemented,       // Feature not implemented yet
+}
+
+// Convert from Gfx_Error to common.Engine_Error
+// DEPRECATED: This conversion will be unnecessary once Gfx_Error is removed
+@(deprecated="Will be removed when Gfx_Error is removed")
+gfx_error_to_engine_error :: proc(err: Gfx_Error) -> common.Engine_Error {
+    switch err {
+    case .None:                    return .None
+    case .Initialization_Failed:   return .Graphics_Initialization_Failed
+    case .Device_Creation_Failed:  return .Device_Creation_Failed
+    case .Window_Creation_Failed:  return .Window_Creation_Failed
+    case .Shader_Compilation_Failed: return .Shader_Compilation_Failed
+    case .Buffer_Creation_Failed:  return .Buffer_Creation_Failed
+    case .Texture_Creation_Failed: return .Texture_Creation_Failed
+    case .Invalid_Handle:          return .Invalid_Handle
+    case .Not_Implemented:         return .Not_Implemented
+    }
+    return .Invalid_Operation
+}
+
+// Convert from common.Engine_Error to Gfx_Error
+// DEPRECATED: This conversion will be unnecessary once Gfx_Error is removed
+@(deprecated="Will be removed when Gfx_Error is removed")
+engine_error_to_gfx_error :: proc(err: common.Engine_Error) -> Gfx_Error {
+    switch err {
+    case .None:                        return .None
+    case .Graphics_Initialization_Failed: return .Initialization_Failed
+    case .Device_Creation_Failed:      return .Device_Creation_Failed
+    case .Window_Creation_Failed:      return .Window_Creation_Failed
+    case .Shader_Compilation_Failed:   return .Shader_Compilation_Failed
+    case .Buffer_Creation_Failed:      return .Buffer_Creation_Failed
+    case .Texture_Creation_Failed:     return .Texture_Creation_Failed
+    case .Invalid_Handle:              return .Invalid_Handle
+    case .Not_Implemented:             return .Not_Implemented
+    case:                              return .Initialization_Failed
+    }
+    return .Initialization_Failed
 }
 
 Gfx_Handle :: distinct u32
@@ -43,6 +88,30 @@ Shader_Stage :: enum_flags {
 	Compute,
 }
 
+Blend_Mode :: enum {
+	None,
+	Alpha,
+	Additive,
+	Multiplicative,
+}
+
+Depth_Func :: enum {
+	Never,
+	Less,
+	Equal,
+	Less_Equal,
+	Greater,
+	Not_Equal,
+	Greater_Equal,
+	Always,
+}
+
+Cull_Mode :: enum {
+	None,
+	Front,
+	Back,
+}
+
 Primitive_Topology :: enum {
 	Triangle_List,
 	Triangle_Strip,
@@ -59,87 +128,133 @@ Clear_Options :: struct {
 	clear_stencil:  bool,
 }
 
+// Use types from the types package where possible
+// Viewport defines a rectangular area of the render target that will be rendered to
+// It includes position, size, and depth range parameters
 Viewport :: struct {
-	x:      f32,
-	y:      f32,
-	width:  f32,
-	height: f32,
-	min_depth: f32,
-	max_depth: f32,
+	position: types.Vector2,  // x, y position in the render target
+	size: types.Vector2,      // width and height of the viewport
+	depth_range: [2]f32,      // min and max depth values (typically 0.0 to 1.0)
 }
 
-Scissor :: struct {
-	x:      i32,
-	y:      i32,
-	width:  i32,
-	height: i32,
-}
+// Use Rectangle from types package for scissor
+Scissor :: types.Recti
 
 // --- Interfaces ---
 
-Gfx_Device :: struct_variant {
-	// Specific implementations will go here, e.g., opengl: ^Gl_Device
+Gfx_Device :: struct {
+	variant: rawptr // Will hold the backend-specific device pointer
 }
 
-Gfx_Window :: struct_variant {
-	// Specific implementations will go here, e.g., opengl: ^Gl_Window
+Gfx_Window :: struct {
+	variant: rawptr // Will hold the backend-specific window pointer
 }
 
-Gfx_Shader :: struct_variant {
-	// e.g. opengl: ^Gl_Shader
-	vulkan: ^rawptr, // Will hold ^vulkan.Vk_Shader_Internal
+Gfx_Shader :: struct {
+	variant: rawptr // Will hold the backend-specific shader pointer
 }
 
-Gfx_Pipeline :: struct_variant {
-    // e.g. opengl: ^Gl_Pipeline
-	vulkan: ^rawptr, // Will hold ^vulkan.Vk_Pipeline_Internal
+Gfx_Pipeline :: struct {
+	variant: rawptr // Will hold the backend-specific pipeline pointer
 }
 
-Gfx_Buffer :: struct_variant {
-	// e.g. opengl: ^Gl_Buffer
-	vulkan: ^rawptr, // Will hold ^vulkan.Vk_Buffer_Internal
+Gfx_Buffer :: struct {
+	variant: rawptr // Will hold the backend-specific buffer pointer
 }
 
-Gfx_Texture :: struct_variant {
-	// e.g. opengl: ^Gl_Texture
+Gfx_Texture :: struct {
+	variant: rawptr // Will hold the backend-specific texture pointer
 }
 
+Gfx_Framebuffer :: struct {
+	variant: rawptr // Will hold the backend-specific framebuffer pointer
+}
 
-Gfx_Device_Interface :: struct #ordered {
+Gfx_Render_Pass :: struct {
+	variant: rawptr // Will hold the backend-specific render pass pointer
+}
+
+// Vertex attribute and buffer layout definitions
+// Describes a single vertex attribute.
+Vertex_Attribute :: struct {
+	location:         u32,    // Shader location
+	buffer_binding:   u32,    // Which buffer binding this attribute reads from (if multiple VBOs bound)
+	format:           Vertex_Format, // Format of the attribute data (e.g., Float32_X2, Unorm8_X4)
+	offset_in_bytes:  u32,    // Offset within the vertex structure to this attribute
+}
+
+// Describes the layout of data in a single vertex buffer.
+Vertex_Buffer_Layout :: struct {
+	binding:          u32,     // The binding point for this buffer (e.g., for glBindVertexBuffer)
+	stride_in_bytes:  u32,     // Stride of the vertex data in this buffer.
+	attributes:       []Vertex_Attribute, // Attributes sourced from this buffer.
+	// step_rate:     Input_Step_Rate, // TODO: For instancing (.Vertex or .Instance)
+}
+
+Vertex_Format :: enum {
+	Float32_X1,
+	Float32_X2,
+	Float32_X3,
+	Float32_X4,
+	Unorm8_X4, // For colors (u8 r,g,b,a normalized to 0-1 float)
+	// Add more as needed: Sint16_X2, etc.
+}
+
+Gfx_Vertex_Array :: struct_variant { // e.g. opengl: ^Gl_Vertex_Array
+	vulkan: ^rawptr // Will hold ^vulkan.Vk_Vertex_Array_Internal
+}
+
+// Gfx_Device_Interface defines the graphics API interface that all backends must implement
+// This allows the engine to work with multiple graphics APIs (OpenGL, Vulkan, DirectX, Metal)
+// while providing a consistent interface to the rest of the codebase
+Gfx_Device_Interface :: struct {
 	// Device Management
-	create_device: proc(allocator: ^rawptr) -> (Gfx_Device, Gfx_Error), // User provides allocator
+	// Creates a graphics device using the provided allocator
+	create_device: proc(allocator: ^rawptr) -> (Gfx_Device, common.Engine_Error),
+	// Destroys a graphics device and frees associated resources
 	destroy_device: proc(device: Gfx_Device),
 
 	// Window/Swapchain Management
-	create_window: proc(device: Gfx_Device, title: string, width, height: int) -> (Gfx_Window, Gfx_Error),
+	// Creates a window associated with the given device
+	create_window: proc(device: Gfx_Device, title: string, width, height: int) -> (Gfx_Window, common.Engine_Error),
+	// Destroys a window and frees associated resources
 	destroy_window: proc(window: Gfx_Window),
-	present_window: proc(window: Gfx_Window) -> Gfx_Error,
-	resize_window: proc(window: Gfx_Window, width, height: int) -> Gfx_Error,
+	// Presents the current frame to the window (swap buffers)
+	present_window: proc(window: Gfx_Window) -> common.Engine_Error,
+	// Resizes the window to the specified dimensions
+	resize_window: proc(window: Gfx_Window, width, height: int) -> common.Engine_Error,
+	// Sets the window title
+	set_window_title: proc(window: Gfx_Window, title: string) -> common.Engine_Error,
+	// Gets the logical size of the window
 	get_window_size: proc(window: Gfx_Window) -> (width, height: int),
-    get_window_drawable_size: proc(window: Gfx_Window) -> (width, height: int), // For high DPI
+	// Gets the drawable size of the window (may differ from logical size on high DPI displays)
+	get_window_drawable_size: proc(window: Gfx_Window) -> (width, height: int),
 
 	// Shader Management
-	create_shader_from_source: proc(device: Gfx_Device, source: string, stage: Shader_Stage) -> (Gfx_Shader, Gfx_Error),
-	create_shader_from_bytecode: proc(device: Gfx_Device, bytecode: []u8, stage: Shader_Stage) -> (Gfx_Shader, Gfx_Error),
+	create_shader_from_source: proc(device: Gfx_Device, source: string, stage: Shader_Stage) -> (Gfx_Shader, common.Engine_Error),
+	create_shader_from_bytecode: proc(device: Gfx_Device, bytecode: []u8, stage: Shader_Stage) -> (Gfx_Shader, common.Engine_Error),
 	destroy_shader: proc(shader: Gfx_Shader),
 
     // Pipeline Management
     // TODO: Define pipeline state (blend, depth, stencil, rasterization, etc.)
-    create_pipeline: proc(device: Gfx_Device, shaders: []Gfx_Shader /*, other pipeline state */) -> (Gfx_Pipeline, Gfx_Error),
+    create_pipeline: proc(device: Gfx_Device, shaders: []Gfx_Shader /*, other pipeline state */) -> (Gfx_Pipeline, common.Engine_Error),
     destroy_pipeline: proc(pipeline: Gfx_Pipeline),
 
 	// Buffer Management
-	create_buffer: proc(device: Gfx_Device, type: Buffer_Type, size: int, data: rawptr = nil, dynamic: bool = false) -> (Gfx_Buffer, Gfx_Error),
-	update_buffer: proc(buffer: Gfx_Buffer, offset: int, data: rawptr, size: int) -> Gfx_Error,
+	create_buffer: proc(device: Gfx_Device, type: Buffer_Type, size: int, data: rawptr = nil, is_dynamic: bool = false) -> (Gfx_Buffer, common.Engine_Error),
+	update_buffer: proc(buffer: Gfx_Buffer, offset: int, data: rawptr, size: int) -> common.Engine_Error,
 	destroy_buffer: proc(buffer: Gfx_Buffer),
     map_buffer: proc(buffer: Gfx_Buffer, offset, size: int) -> rawptr,
     unmap_buffer: proc(buffer: Gfx_Buffer),
 
 
 	// Texture Management
-	create_texture: proc(device: Gfx_Device, width, height: int, format: Texture_Format, usage: Texture_Usage, data: rawptr = nil) -> (Gfx_Texture, Gfx_Error),
-	update_texture: proc(texture: Gfx_Texture, x, y, width, height: int, data: rawptr) -> Gfx_Error,
+	create_texture: proc(device: Gfx_Device, width, height: int, format: Texture_Format, usage: Texture_Usage, data: rawptr = nil) -> (Gfx_Texture, common.Engine_Error),
+	update_texture: proc(texture: Gfx_Texture, x, y, width, height: int, data: rawptr) -> common.Engine_Error,
 	destroy_texture: proc(texture: Gfx_Texture),
+	bind_texture_to_unit: proc(device: Gfx_Device, texture: Gfx_Texture, unit: int),
+	get_texture_width: proc(texture: Gfx_Texture) -> int,
+	get_texture_height: proc(texture: Gfx_Texture) -> int,
 
 	// Drawing Commands
 	begin_frame: proc(device: Gfx_Device), // Signifies start of a new frame
@@ -148,6 +263,7 @@ Gfx_Device_Interface :: struct #ordered {
 	clear_screen: proc(device: Gfx_Device, options: Clear_Options),
     set_viewport: proc(device: Gfx_Device, viewport: Viewport),
     set_scissor: proc(device: Gfx_Device, scissor: Scissor),
+    disable_scissor: proc(device: Gfx_Device),
 	set_pipeline: proc(device: Gfx_Device, pipeline: Gfx_Pipeline),
 	set_vertex_buffer: proc(device: Gfx_Device, buffer: Gfx_Buffer, binding_index: u32 = 0, offset: u32 = 0),
 	set_index_buffer: proc(device: Gfx_Device, buffer: Gfx_Buffer, offset: u32 = 0), // Assuming u16 or u32 indices based on buffer creation or a global setting
@@ -155,49 +271,35 @@ Gfx_Device_Interface :: struct #ordered {
 	draw: proc(device: Gfx_Device, vertex_count, instance_count, first_vertex, first_instance: u32),
 	draw_indexed: proc(device: Gfx_Device, index_count, instance_count, first_index, base_vertex, first_instance: u32),
 
+	// Framebuffer Management
+	create_framebuffer: proc(device: Gfx_Device, width, height: int, color_format: Texture_Format, depth_format: Texture_Format) -> (Gfx_Framebuffer, common.Engine_Error),
+	destroy_framebuffer: proc(framebuffer: Gfx_Framebuffer),
+
+	// Render Pass Management
+	create_render_pass: proc(device: Gfx_Device, framebuffer: Gfx_Framebuffer, clear_color, clear_depth: bool) -> (Gfx_Render_Pass, common.Engine_Error),
+	begin_render_pass: proc(device: Gfx_Device, render_pass: Gfx_Render_Pass, clear_color: math.Color, clear_depth: f32),
+	end_render_pass: proc(device: Gfx_Device, render_pass: Gfx_Render_Pass),
+
+	// State Management
+	set_blend_mode: proc(device: Gfx_Device, blend_mode: Blend_Mode),
+	set_depth_test: proc(device: Gfx_Device, enabled: bool, write: bool, func: Depth_Func),
+	set_cull_mode: proc(device: Gfx_Device, cull_mode: Cull_Mode),
+
 	// Uniform & Resource Binding (associated with a bound pipeline)
 	// These assume a pipeline is already bound with set_pipeline.
-	set_uniform_mat4: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, mat: matrix[4,4]f32) -> Gfx_Error,
-	set_uniform_vec2: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, vec: [2]f32) -> Gfx_Error,
-	set_uniform_vec3: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, vec: [3]f32) -> Gfx_Error,
-	set_uniform_vec4: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, vec: [4]f32) -> Gfx_Error,
-	set_uniform_int: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, val: i32) -> Gfx_Error,
-	set_uniform_float: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, val: f32) -> Gfx_Error,
+	set_uniform_mat4: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, mat: matrix[4,4]f32) -> common.Engine_Error,
+	set_uniform_vec2: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, vec: [2]f32) -> common.Engine_Error,
+	set_uniform_vec3: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, vec: [3]f32) -> common.Engine_Error,
+	set_uniform_vec4: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, vec: [4]f32) -> common.Engine_Error,
+	set_uniform_int: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, val: i32) -> common.Engine_Error,
+	set_uniform_float: proc(device: Gfx_Device, pipeline: Gfx_Pipeline, name: string, val: f32) -> common.Engine_Error,
 	
-	bind_texture_to_unit: proc(device: Gfx_Device, texture: Gfx_Texture, unit: u32) -> Gfx_Error,
+	bind_texture_to_unit: proc(device: Gfx_Device, texture: Gfx_Texture, unit: u32) -> common.Engine_Error,
 	// set_sampler (for controlling texture sampling parameters like filter, wrap) could be here too,
 	// or part of texture creation/pipeline state. For now, keeping it simple.
 
 
 	// Vertex Array Objects / Vertex Layouts
-	// Describes a single vertex attribute.
-	Vertex_Attribute :: struct {
-		location:         u32,    // Shader location
-		buffer_binding:   u32,    // Which buffer binding this attribute reads from (if multiple VBOs bound)
-		format:           Vertex_Format, // Format of the attribute data (e.g., Float32_X2, Unorm8_X4)
-		offset_in_bytes:  u32,    // Offset within the vertex structure to this attribute
-	}
-
-	// Describes the layout of data in a single vertex buffer.
-	Vertex_Buffer_Layout :: struct {
-		binding:          u32,     // The binding point for this buffer (e.g., for glBindVertexBuffer)
-		stride_in_bytes:  u32,     // Stride of the vertex data in this buffer.
-		attributes:       []Vertex_Attribute, // Attributes sourced from this buffer.
-		// step_rate:     Input_Step_Rate, // TODO: For instancing (.Vertex or .Instance)
-	}
-	
-	Vertex_Format :: enum {
-		Float32_X1,
-		Float32_X2,
-		Float32_X3,
-		Float32_X4,
-		Unorm8_X4, // For colors (u8 r,g,b,a normalized to 0-1 float)
-		// Add more as needed: Sint16_X2, etc.
-	}
-
-	Gfx_Vertex_Array :: struct_variant { // e.g. opengl: ^Gl_Vertex_Array
-		vulkan: ^rawptr, // Will hold ^vulkan.Vk_Vertex_Array_Internal
-	}
 
 	// Creates a VAO. For OpenGL, this encapsulates VBO bindings, EBO binding, and vertex attribute pointers.
 	// `vertex_buffer_layouts` describes how attributes are laid out in the provided `vertex_buffers`.
@@ -207,8 +309,8 @@ Gfx_Device_Interface :: struct #ordered {
 		device: Gfx_Device, 
 		vertex_buffer_layouts: []Vertex_Buffer_Layout, 
 		vertex_buffers: []Gfx_Buffer, // VBOs
-		index_buffer: Gfx_Buffer,      // EBO (optional, Gfx_Buffer{} if none)
-	) -> (Gfx_Vertex_Array, Gfx_Error),
+		index_buffer: Gfx_Buffer      // EBO (optional, Gfx_Buffer{} if none)
+	) -> (Gfx_Vertex_Array, common.Engine_Error),
 	
 	destroy_vertex_array: proc(vao: Gfx_Vertex_Array),
 	bind_vertex_array:    proc(device: Gfx_Device, vao: Gfx_Vertex_Array), // Pass Gfx_Vertex_Array{} to unbind.
@@ -218,7 +320,7 @@ Gfx_Device_Interface :: struct #ordered {
 	get_texture_height: proc(texture: Gfx_Texture) -> int,
 
     // Utility
-    get_error_string: proc(error: Gfx_Error) -> string,
+    get_error_string: proc(error: common.Engine_Error) -> string,
 }
 
 // Global instance of the interface, to be populated by a specific backend (e.g., OpenGL)

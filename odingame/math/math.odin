@@ -2,12 +2,14 @@ package math
 
 import linalg "core:math/linalg"
 import "core:math" // For math.cos, math.sin
+import "../types"
 
-Vector2f :: linalg.Vector2f
-Vector2i :: linalg.Vector2i
-Rectf :: struct { x, y, w, h: f32 }
-Recti :: struct { x, y, w, h: i32 }
-Matrix4f :: linalg.Matrix4f
+// Use type aliases from the types package
+Vector2f :: types.Vector2f
+Vector2i :: types.Vector2i
+Rectf :: types.Rectf
+Recti :: types.Recti
+Matrix4f :: types.Matrix4f
 
 // Creates an orthographic projection matrix
 // Assumes linalg.matrix4_orthographic(left, right, bottom, top, near, far, homogeneous_depth: bool)

@@ -2,7 +2,7 @@ package scene
 
 import "../core" // For GameTime
 import "../graphics" // For SpriteBatch
-import "../math"   // For Transform2D (though not directly used by Scene methods, GameObjects use it)
+import "../math"   // For Transform2D, Color, and other common types
 import "core:mem"
 import "core:slice"
 import "core:log"
@@ -173,7 +173,7 @@ draw_scene :: proc(
 	}
 
 	proj_view_matrix: math.Matrix4f
-	clear_color_final: core.Color
+	clear_color_final: math.Color
 
 	active_camera_found := false
 	if s.active_camera_component.ok {
@@ -184,7 +184,7 @@ draw_scene :: proc(
 			
 			// 1. Clear screen with camera's background color
 			clear_options := gfx.Clear_Options{
-				color = { // Convert core.Color to [4]f32
+				color = { // Convert math.Color to [4]f32
 					f32(camera_data.background_color.r)/255,
 					f32(camera_data.background_color.g)/255,
 					f32(camera_data.background_color.b)/255,
@@ -216,7 +216,7 @@ draw_scene :: proc(
 		log.debugf("Scene '%s': No active camera. Using default projection and clear.", s.name)
 		
 		// Default clear (e.g., black)
-		default_bg := core.Color{20, 20, 20, 255}
+		default_bg := math.Color{20, 20, 20, 255}
 		clear_options := gfx.Clear_Options{
 			color = {f32(default_bg.r)/255, f32(default_bg.g)/255, f32(default_bg.b)/255, f32(default_bg.a)/255},
 			clear_color = true, clear_depth = true, depth = 1.0,

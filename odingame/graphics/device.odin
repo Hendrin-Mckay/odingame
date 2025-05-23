@@ -274,7 +274,7 @@ gl_create_pipeline :: proc(device: Gfx_Device, shaders: []Gfx_Shader /*, other s
 gl_destroy_pipeline :: proc(pipeline: Gfx_Pipeline) {
 }
 
-gl_create_buffer :: proc(device: Gfx_Device, type: Buffer_Type, size: int, data: rawptr = nil, dynamic: bool = false) -> (Gfx_Buffer, Gfx_Error) {
+gl_create_buffer :: proc(device: Gfx_Device, type: Buffer_Type, size: int, data: rawptr = nil, is_dynamic: bool = false) -> (Gfx_Buffer, Gfx_Error) {
 	return Gfx_Buffer{}, .Not_Implemented
 }
 
@@ -313,13 +313,13 @@ gl_end_frame :: proc(device: Gfx_Device) {
 
 gl_set_viewport :: proc(device: Gfx_Device, viewport: Viewport) {
     // Assumes correct context is current
-    gl.Viewport(i32(viewport.x), i32(viewport.y), i32(viewport.width), i32(viewport.height))
-    gl.DepthRangef(viewport.min_depth, viewport.max_depth)
+    gl.Viewport(i32(viewport.position.x), i32(viewport.position.y), i32(viewport.size.x), i32(viewport.size.y))
+    gl.DepthRangef(viewport.depth_range[0], viewport.depth_range[1])
 }
 
 gl_set_scissor :: proc(device: Gfx_Device, scissor: Scissor) {
     // Assumes correct context is current
-    gl.Scissor(scissor.x, scissor.y, scissor.width, scissor.height)
+    gl.Scissor(scissor.x, scissor.y, scissor.w, scissor.h)
     // User must enable/disable gl.SCISSOR_TEST separately if needed.
 }
 

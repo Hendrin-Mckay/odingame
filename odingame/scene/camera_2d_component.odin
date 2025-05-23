@@ -1,8 +1,8 @@
 package scene
 
-import "../core" // For core.Color, core.GameTime
-import "../graphics" // For gfx.Color (if used, but core.Color is preferred), gfx.SpriteBatch
-import "../math"   // For math.Vector2f, math.Matrix4f, math.Transform2D
+import "../core" // For core.GameTime
+import "../graphics" // For gfx.SpriteBatch
+import "../math"   // For math.Vector2f, math.Matrix4f, math.Transform2D, math.Color
 import "core:log"
 import "core:math/linalg" // For matrix operations
 import "core:math"      // For math.tan, etc.
@@ -11,7 +11,7 @@ import "core:math"      // For math.tan, etc.
 Camera2DComponent_Data :: struct {
 	zoom:            f32,
 	viewport_size:   math.Vector2f, // Width and height of the camera's view in pixels
-	background_color: core.Color,    // Color to clear the screen with
+	background_color: math.Color,    // Color to clear the screen with
 	// is_active_camera_tag: bool, // Tag to identify, Scene will hold the actual active reference.
 	                            // This tag can be useful for querying if a GO *thinks* it's an active camera.
 	                            // However, Scene.active_camera_component is the source of truth.
@@ -170,7 +170,7 @@ CAMERA_2D_COMPONENT_VTABLE :: Component_VTable{
 make_camera_2d_component_data :: proc(
 	viewport_width, viewport_height: f32, 
 	zoom_level: f32,
-	bg_color: core.Color,
+	bg_color: math.Color,
 	allocator := context.allocator,
 ) -> ^Camera2DComponent_Data {
 	data := new(Camera2DComponent_Data, allocator)
@@ -188,7 +188,7 @@ add_camera_2d_component :: proc(
 	owner_go: ^GameObject, 
 	viewport_width, viewport_height: f32, 
 	zoom_level: f32,
-	bg_color := core.Color{50,50,50,255}, // Default dark grey
+	bg_color := math.Color{50,50,50,255}, // Default dark grey
 ) -> ^Component { // Returns ^scene.Component
 	if owner_go == nil {
 		log.error("add_camera_2d_component: owner_go is nil.")

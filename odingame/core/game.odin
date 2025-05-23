@@ -4,72 +4,97 @@ import "vendor:sdl2"
 import "vendor:sdl2/image" // Already there, but confirm
 import "../graphics"
 import "../input"
+import "../types" // For common types: Color, Vector2, etc.
+import "../common" // For standardized error handling
 import "core:fmt" // For error printing in run
 
-// Basic Color struct and constants, can be moved to a separate core/colors.odin
-Color :: struct { r, g, b, a: u8 }
+// Common types like Color and Vector2 are now defined in the types package
 
-WHITE :: Color{255, 255, 255, 255}
-BLACK :: Color{0, 0, 0, 255}
-RED :: Color{255, 0, 0, 255}
-GREEN :: Color{0, 255, 0, 255}
-BLUE :: Color{0, 0, 255, 255}
-CORNFLOWER_BLUE :: Color{100, 149, 237, 255} // Used in simple_game
+// User-defined game functions that serve as callbacks for the game loop
 
-// User-defined game functions
+// InitializeFn is called once when the game starts
+// Use this to set up game state, allocate resources, and prepare the game
 InitializeFn :: proc(game: ^Game)
+
+// LoadContentFn is called after initialization to load game assets
+// Use this to load textures, sounds, and other content
 LoadContentFn :: proc(game: ^Game)
+
+// UpdateFn is called every frame to update game logic
+// Use this to handle input, update game state, and perform game logic
 UpdateFn :: proc(game: ^Game, game_time: GameTime)
+
+// DrawFn is called every frame to render the game
+// Use this to draw sprites, UI, and other visual elements
 DrawFn :: proc(game: ^Game, game_time: GameTime)
 
+// GameTime provides timing information for the game loop
+// This is passed to the update and draw callbacks
 GameTime :: struct {
-    elapsed_game_time: f64, // Seconds
-    total_game_time:   f64, // Seconds
+    elapsed_game_time: f64, // Time elapsed since the last frame in seconds
+    total_game_time:   f64, // Total time elapsed since the game started in seconds
 }
 
+// Game is the main structure that manages the game state and lifecycle
+// It contains references to the window, graphics device, and sprite batch
+// as well as callbacks for game logic and rendering
 Game :: struct {
-    // Modules
-    window:          ^Window, // Window now holds Gfx_Device and Gfx_Window
-    // graphics_device field is removed, access via game.window.gfx_device
-    sprite_batch:    ^graphics.SpriteBatch, 
-    // Input state is managed globally in 'input' package
-
-    // User-defined procedures
-    initialize_fn:  InitializeFn,
-    load_content_fn: LoadContentFn,
-    update_fn:       UpdateFn,
-    draw_fn:         DrawFn,
-
-    // State
-    running:         bool,
+    // Core modules and resources
+    window:          ^Window, // The game window (contains gfx_device and gfx_window)
+    sprite_batch:    ^graphics.SpriteBatch, // For efficient sprite rendering
+    user_data:       rawptr, // User-defined data for storing game state
     
-    // Timing
-    game_time:       GameTime,
-    _previous_ticks: u64,
-    _perf_frequency: u64,
+    // User-defined callback procedures
+    initialize_fn:   InitializeFn,  // Called once at game start
+    load_content_fn: LoadContentFn, // Called to load game assets
+    update_fn:       UpdateFn,      // Called every frame to update game logic
+    draw_fn:         DrawFn,        // Called every frame to render the game
+
+    // Game state
+    running:         bool,          // Controls whether the game loop continues
+    
+    // Timing information
+    game_time:       GameTime,      // Current game timing information
+    _previous_ticks: u64,          // Internal: previous frame tick count
+    _perf_frequency: u64,          // Internal: performance counter frequency
 }
 
 // This is an internal constructor
-_new_game_for_run :: proc(title: string, width, height: int) -> (^Game, error) {
+_new_game_for_run :: proc(title: string, width, height: int, backend_type: graphics.Backend_Type = .Auto) -> (^Game, common.Engine_Error) {
 	// Initialize SDL
 	if sdl2.Init(sdl2.INIT_VIDEO | sdl2.INIT_TIMER | sdl2.INIT_EVENTS) != 0 {
-		return nil, sdl2.GetError()
+		log.errorf("SDL initialization failed: %s", sdl2.GetError())
+		return nil, common.Engine_Error.Graphics_Initialization_Failed
 	}
 
 	// Initialize SDL_image for image loading (PNG, JPG, etc.)
 	IMG_INIT_PNG :: 0x00000001
 	IMG_INIT_JPG :: 0x00000002
 	if sdl2.image.Init(u32(IMG_INIT_PNG | IMG_INIT_JPG)) & u32(IMG_INIT_PNG | IMG_INIT_JPG) != u32(IMG_INIT_PNG | IMG_INIT_JPG) {
-		err_msg := sdl2.image.GetError() 
+		log.errorf("SDL_image initialization failed: %s", sdl2.image.GetError())
 		sdl2.Quit()
-		return nil, err_msg
+		return nil, common.Engine_Error.Graphics_Initialization_Failed
 	}
 
 	game := new(Game) // Allocated with context.allocator by default
 
 	// --- Initialize Graphics API ---
-	// This is a new, crucial step. Must be called before any gfx_api functions.
-	graphics.initialize_sdl_opengl_backend() 
+	// Initialize the selected graphics backend
+	backend_settings := graphics.Backend_Settings{
+		preferred_backend = backend_type,
+		fallback_order = []graphics.Backend_Type{.OpenGL, .Vulkan}, // Fallback order if preferred backend fails
+		debug_mode = false,
+	}
+	
+	backend_err := graphics.initialize_graphics_backend(backend_settings)
+	if backend_err != .None {
+		log.errorf("_new_game_for_run: Failed to initialize graphics backend: %s", common.engine_error_to_string(backend_err))
+		sdl2.image.Quit()
+		sdl2.Quit()
+		free(game)
+		return nil, backend_err
+	}
+	
 	// We need an allocator for the graphics device. Game's context.allocator can be used.
 	main_gfx_device, device_err := graphics.gfx_api.create_device(&context.allocator)
 	if device_err != .None {
@@ -77,7 +102,7 @@ _new_game_for_run :: proc(title: string, width, height: int) -> (^Game, error) {
 		sdl2.image.Quit()
 		sdl2.Quit()
 		free(game)
-		return nil, device_err // Propagate Gfx_Error
+		return nil, graphics.gfx_error_to_engine_error(device_err) // Convert Gfx_Error to Engine_Error
 	}
 	// --- End Initialize Graphics API ---
 
@@ -90,6 +115,7 @@ _new_game_for_run :: proc(title: string, width, height: int) -> (^Game, error) {
 		sdl2.image.Quit()
 		sdl2.Quit()
 		free(game)
+		// err_win is already a common.Engine_Error
 		return nil, err_win
 	}
 	game.window = win
@@ -106,7 +132,7 @@ _new_game_for_run :: proc(title: string, width, height: int) -> (^Game, error) {
 		sdl2.image.Quit()
 		sdl2.Quit()
 		free(game)
-		return nil, sb_err
+		return nil, graphics.gfx_error_to_engine_error(sb_err) // Convert Gfx_Error to Engine_Error
 	}
 	game.sprite_batch = sb
 	
@@ -124,31 +150,43 @@ _destroy_game :: proc(game: ^Game) {
 	if game == nil {
 		return
 	}
-	
-	// User unload content would be called here if it existed
 
-	// Destroy SpriteBatch first, as it uses the graphics device.
-	graphics.destroy_spritebatch(game.sprite_batch) 
-	game.sprite_batch = nil
-	
-	// Store device handle before window is destroyed, as window owns it conceptually for access.
-	// However, the device's lifecycle might outlive a single window if multiple windows were supported.
-	// For this single-window game, game.window.gfx_device is the main device.
-	device_to_destroy := game.window.gfx_device
+	// Call user's unload content if it exists
+	// Note: We don't have a dedicated unload callback in the current API,
+	// but if we add one in the future, it would be called here
 
-	// Destroy core.Window (which in turn calls gfx_api.destroy_window for the Gfx_Window)
-	destroy_window(game.window)
-	game.window = nil
+	// First, clean up the SpriteBatch
+	if game.sprite_batch != nil {
+		graphics.destroy_spritebatch(game.sprite_batch)
+		game.sprite_batch = nil
+	}
+
+	// Store device handle before window is destroyed
+	device_to_destroy := Gfx_Device{}
+	if game.window != nil {
+		device_to_destroy = game.window.gfx_device
+
+		// Destroy the window which will clean up its resources
+		destroy_window(game.window)
+		game.window = nil
+	}
 	
-	// Now destroy the Gfx_Device
-	if is_valid(device_to_destroy) { // Check if device handle is valid before destroying
+	// Now destroy the Gfx_Device if it's valid
+	if is_valid(device_to_destroy) {
 		graphics.gfx_api.destroy_device(device_to_destroy)
 	}
 
-	sdl2.image.Quit()
-	sdl2.Quit() 
+	// Clean up SDL subsystems
+	if sdl2.image.Was_Init() != 0 {
+		sdl2.image.Quit()
+	}
+
+	if sdl2.Was_Init(0) != 0 {
+		sdl2.Quit()
+	}
 	
-	free(game) 
+	// Finally free the game object itself
+	free(game)
 }
 
 // run - main entry point for the game
@@ -161,8 +199,8 @@ run :: proc(
     draw_fn: DrawFn,
 ) {
     game, err := _new_game_for_run(title, width, height)
-    if err != nil {
-        fmt.eprintln("Failed to initialize game:", err)
+    if err != .None {
+        fmt.eprintln("Failed to initialize game:", common.engine_error_to_string(err))
         return
     }
     

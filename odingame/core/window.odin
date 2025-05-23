@@ -2,6 +2,7 @@ package core
 
 import "vendor:sdl2" // Still needed for input events, window flags etc.
 import "../graphics" // Import the new graphics interface package
+import "../common" // For standardized error handling
 import "core:log"
 
 Window :: struct {
@@ -28,18 +29,18 @@ new_window :: proc(
 	title: string, 
 	width, height: int,
 	// flags: graphics.Window_Flags, // TODO: Add flags if Gfx_Window supports them (e.g. resizable)
-) -> (^Window, error) {
+) -> (^Window, common.Engine_Error) {
 
 	if !is_valid(device) { // is_valid for Gfx_Device
 		log.error("new_window: Provided Gfx_Device is invalid.")
-		return nil, graphics.Gfx_Error.Invalid_Handle // Or appropriate error
+		return nil, common.Engine_Error.Invalid_Handle
 	}
 	
 	gfx_win_handle, err := graphics.gfx_api.create_window(device, title, width, height)
 	if err != .None {
 		log.errorf("new_window: gfx_api.create_window failed: %s", graphics.gfx_api.get_error_string(err))
 		// Don't destroy device here, caller owns it.
-		return nil, err // Propagate Gfx_Error as 'error' interface
+		return nil, graphics.gfx_error_to_engine_error(err) // Convert Gfx_Error to Engine_Error
 	}
 
 	win := new(Window)
@@ -65,21 +66,25 @@ is_valid :: proc(device: graphics.Gfx_Device) -> bool {
 }
 
 
-// set_title: Window title changes should ideally go through the graphics API if it manages the window.
-// The Gfx_Window interface doesn't have set_title yet.
-// If Gl_Window (inside Gfx_Window) exposes the SDL window, it could be done, but breaks abstraction.
-// For now, title is set at creation. If dynamic title changes are needed,
-// Gfx_Window_Interface should be extended.
-/*
-set_title :: proc(win: ^Window, title: string) {
-	// This would require either Gfx_Window to have a set_title method,
-	// or access to the underlying SDL window handle if Gl_Window exposes it.
-	// e.g., if win.gfx_window.variant.(^graphics.Gl_Window).sdl_window is accessible:
-	// sdl2.SetWindowTitle(win.gfx_window.variant.(^graphics.Gl_Window).sdl_window, title)
-	// win.title = title
-	log.warn("set_title on core.Window is not fully implemented via Gfx_Interface yet.")
+// Set the window title
+// This implementation uses the graphics API to change the window title
+set_title :: proc(win: ^Window, title: string) -> common.Engine_Error {
+	if win == nil || win.gfx_window.variant == nil {
+		log.error("set_title: Window is nil or invalid")
+		return .Invalid_Handle
+	}
+	
+	// Update the window title through the graphics API
+	err := graphics.gfx_api.set_window_title(win.gfx_window, title)
+	if err != .None {
+		log.errorf("set_title: Failed to set window title: %s", graphics.gfx_api.get_error_string(err))
+		return graphics.gfx_error_to_engine_error(err)
+	}
+	
+	// Update the local title field
+	win.title = title
+	return .None
 }
-*/
 
 destroy_window :: proc(win: ^Window) {
 	if win == nil {

@@ -1,6 +1,6 @@
 # OdinGame
 
-A modern, cross-platform game development framework for the [Odin Programming Language](https://odin-lang.org/) that shares similarities with PyGame but with a focus on performance and modern graphics APIs.
+A modern, cross-platform game development framework for the [Odin Programming Language](https://odin-lang.org/) that shares similarities with XNA/FNA/MONOGAME but with a focus on performance and modern graphics APIs.
 
 ## Features
 

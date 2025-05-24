@@ -1,6 +1,7 @@
 package vulkan
 
 import "../gfx_interface"
+import gfx_types "../../graphics/types" // For Gfx_Pipeline_Desc, Vertex_Format
 import "../../common" 
 import "core:log"
 import vk "vendor:vulkan" 
@@ -36,41 +37,128 @@ vk_create_shader_from_source_wrapper :: proc( device: gfx_interface.Gfx_Device, 
 	return vk_shader.vk_create_shader_from_source_internal(device, source, stage)
 }
 
+// --- Helper to translate gfx_types.Vertex_Format to vk.Format ---
+to_vk_vertex_format :: proc(format: gfx_types.Vertex_Format) -> (vk_format: vk.Format, ok: bool) {
+    ok = true
+    switch format {
+    case .Float:  vk_format = .R32_SFLOAT;
+    case .Float2: vk_format = .R32G32_SFLOAT;
+    case .Float3: vk_format = .R32G32B32_SFLOAT;
+    case .Float4: vk_format = .R32G32B32A32_SFLOAT;
+    // Common normalized formats
+    case .UByte4N: vk_format = .R8G8B8A8_UNORM; // Often used for colors
+    case .Byte4N:  vk_format = .R8G8B8A8_SNORM;
+    // Common integer formats (less common for vertex colors, more for custom data)
+    case .Int:    vk_format = .R32_SINT;
+    case .Int2:   vk_format = .R32G32_SINT;
+    case .Int3:   vk_format = .R32G32B32_SINT;
+    case .Int4:   vk_format = .R32G32B32A32_SINT;
+    case .UInt:   vk_format = .R32_UINT;
+    case .UInt2:  vk_format = .R32G32_UINT;
+    case .UInt3:  vk_format = .R32G32B32_UINT;
+    case .UInt4:  vk_format = .R32G32B32A32_UINT;
+    // Short formats
+    case .Short2:   vk_format = .R16G16_SINT;
+    case .Short2N:  vk_format = .R16G16_SNORM;
+    case .Short4:   vk_format = .R16G16B16A16_SINT;
+    case .Short4N:  vk_format = .R16G16B16A16_SNORM;
+    else:
+        log.errorf("Vulkan: to_vk_vertex_format: Unsupported gfx_types.Vertex_Format: %v", format)
+        ok = false
+        vk_format = .UNDEFINED
+    }
+    return
+}
+
 // --- Pipeline Management Wrappers ---
-vk_create_pipeline_wrapper :: proc( device: gfx_interface.Gfx_Device, shaders: []gfx_interface.Gfx_Shader,) -> (gfx_interface.Gfx_Pipeline, common.Engine_Error) {
+vk_create_pipeline_wrapper :: proc( device: gfx_interface.Gfx_Device, desc: ^gfx_types.Gfx_Pipeline_Desc,) -> (gfx_interface.Gfx_Pipeline, common.Engine_Error) {
 	vk_dev_internal, ok_dev := device.variant.(vk_types.Vk_Device_Variant)
 	if !ok_dev || vk_dev_internal == nil { return gfx_interface.Gfx_Pipeline{}, common.Engine_Error.Invalid_Handle }
-	if vk_dev_internal.primary_window_for_pipeline == nil { return gfx_interface.Gfx_Pipeline{}, common.Engine_Error.Invalid_Handle }
+	if vk_dev_internal.primary_window_for_pipeline == nil { 
+        log.error("Vulkan: vk_create_pipeline_wrapper: primary_window_for_pipeline is not set on Vulkan device internal.")
+        return gfx_interface.Gfx_Pipeline{}, common.Engine_Error.Invalid_Operation 
+    }
+    if desc == nil {
+        log.error("Vulkan: vk_create_pipeline_wrapper: Gfx_Pipeline_Desc is nil.")
+        return gfx_interface.Gfx_Pipeline{}, common.Engine_Error.Invalid_Parameter
+    }
+
 	primary_window := vk_dev_internal.primary_window_for_pipeline
-	swapchain_format := primary_window.swapchain_format 
-	if swapchain_format == .UNDEFINED {
-		log.errorf("vk_create_pipeline_wrapper: Primary window (SDL: %s) has an undefined swapchain format.", sdl.GetWindowTitle(primary_window.sdl_window))
-		return gfx_interface.Gfx_Pipeline{}, common.Engine_Error.Device_Creation_Failed 
-	}
-	// render_pass_handle is now part of Vk_Window_Internal, created with the window/swapchain.
-    // It's assumed to be compatible.
 	render_pass_handle := primary_window.render_pass 
 	if render_pass_handle == vk.NULL_HANDLE {
-        log.error("vk_create_pipeline_wrapper: Primary window has no valid render pass.")
+        log.error("Vulkan: vk_create_pipeline_wrapper: Primary window has no valid render pass.")
         return gfx_interface.Gfx_Pipeline{}, common.Engine_Error.Invalid_Operation
     }
+
+    // Create Shader Slice from Gfx_Pipeline_Desc
+    if desc.vertex_shader.variant == nil || desc.pixel_shader.variant == nil {
+        log.error("Vulkan: vk_create_pipeline_wrapper requires valid vertex and pixel shaders in Gfx_Pipeline_Desc.")
+        return gfx_interface.Gfx_Pipeline{}, .Invalid_Parameter
+    }
+    // Note: vk_create_pipeline_internal expects a slice of Gfx_Shader.
+    // The Gfx_Pipeline_Desc holds individual shader fields.
+    // This might need adjustment if vk_create_pipeline_internal expects more than just VS/PS.
+    // For now, assuming it can take a slice of 2 (VS, PS).
+    shaders_slice := []gfx_interface.Gfx_Shader{desc.vertex_shader, desc.pixel_shader};
+
+    // Translate Vertex Layouts from Gfx_Pipeline_Desc
+    // Using context.temp_allocator for these dynamic arrays for simplicity within this scope.
+    // Ensure these are not used beyond the call to vk_create_pipeline_internal if it doesn't copy them.
+    vertex_bindings_slice := make([dynamic]vk_types.Vk_Vertex_Input_Binding_Description, 0, len(desc.vertex_buffer_layouts), context.temp_allocator);
+    defer if vertex_bindings_slice != nil { delete(vertex_bindings_slice); } // Check for nil if make fails
+    
+    // Estimate initial capacity for attributes. If one buffer layout has 4 attributes, then capacity = 4.
+    // If multiple layouts, sum their attribute counts. For now, a small default.
+    initial_attr_capacity := 0
+    if len(desc.vertex_buffer_layouts) > 0 {
+        for layout_desc in desc.vertex_buffer_layouts {
+            initial_attr_capacity += len(layout_desc.layout.attributes)
+        }
+    }
+    if initial_attr_capacity == 0 { initial_attr_capacity = 4 } // Default if no attributes
+
+    vertex_attributes_slice := make([dynamic]vk_types.Vk_Vertex_Input_Attribute_Description, 0, initial_attr_capacity, context.temp_allocator);
+    defer if vertex_attributes_slice != nil { delete(vertex_attributes_slice); }
+
+    for layout_desc in desc.vertex_buffer_layouts {
+        binding_description := vk_types.Vk_Vertex_Input_Binding_Description{
+            binding = layout_desc.buffer_index, 
+            stride  = layout_desc.layout.stride,
+            inputRate = .VERTEX, // Default
+        };
+        // Map from gfx_types.Vertex_Step_Rate to vk_types.Vk_Vertex_Input_Rate
+        switch layout_desc.layout.step_rate {
+            case .Per_Vertex:   binding_description.inputRate = .VERTEX;
+            case .Per_Instance: binding_description.inputRate = .INSTANCE;
+        }
+        append(&vertex_bindings_slice, binding_description);
+
+        for attr in layout_desc.layout.attributes {
+            vk_fmt, ok_format := to_vk_vertex_format(attr.format);
+            if !ok_format {
+                log.errorf("Vulkan: Unsupported vertex attribute format %v for location %d", attr.format, attr.location);
+                return gfx_interface.Gfx_Pipeline{}, .Invalid_Parameter;
+            }
+            attribute_description := vk_types.Vk_Vertex_Input_Attribute_Description{
+                location = attr.location,
+                binding  = layout_desc.buffer_index, // Attributes for this binding
+                format   = vk_fmt,
+                offset   = attr.offset,
+            };
+            append(&vertex_attributes_slice, attribute_description);
+        }
+    }
 	
-	vertex_bindings_slice: []vk_types.Vk_Vertex_Input_Binding_Description
-	vertex_attributes_slice: []vk_types.Vk_Vertex_Input_Attribute_Description
-	if primary_window.active_vao.variant != nil {
-		if vk_vao_internal, ok_vao_internal := primary_window.active_vao.variant.(^vk_types.Vk_Vertex_Array_Internal); ok_vao_internal && vk_vao_internal != nil {
-			vertex_bindings_slice = vk_vao_internal.binding_descriptions[:]
-			vertex_attributes_slice = vk_vao_internal.attribute_descriptions[:]
-		}
-	}
-	
-    // vk_create_pipeline_internal now creates its own pipeline_layout using a predefined descriptor set layout
+    // Call vk_create_pipeline_internal with the new slices.
+    // The old logic deriving vertex_bindings/attributes from active_vao is removed.
 	gfx_pipeline, pipe_err := vk_pipeline.vk_create_pipeline_internal(
-		device, shaders, render_pass_handle, 
-		vertex_bindings_slice, vertex_attributes_slice,
+		device, 
+        shaders_slice[:], // Pass the slice of shaders
+        render_pass_handle, 
+		vertex_bindings_slice[:], 
+        vertex_attributes_slice[:],
 	)
 	if pipe_err != .None {
-		// vk_create_pipeline_internal should handle cleanup of its created pipeline_layout and dsl if it fails.
 		return gfx_interface.Gfx_Pipeline{}, pipe_err
 	}
 	return gfx_pipeline, .None

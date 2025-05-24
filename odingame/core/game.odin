@@ -370,6 +370,22 @@ game_run :: proc(game: ^Game, title: string, width, height: int, preferred_backe
     // For now, assume GDM.apply_changes can determine it or uses a default.
     // Let's modify apply_changes to take a preferred backend or GDM stores it from Game.
     // For this diff, assume GDM.apply_changes is self-sufficient for now.
+
+    // Initialize the graphics backend based on preference
+    init_err := graphics.initialize_graphics_backend(graphics.Backend_Settings{
+        preferred_backend = preferred_backend, // This is the parameter from game_run
+        // fallback_order can be nil or a default list if desired
+        // debug_mode can be false or configurable if options are added to game_run
+    })
+    if init_err != .None {
+        log.errorf("Failed to initialize the graphics backend: %v", init_err)
+        // Perform necessary cleanup and return, similar to how gdm_err is handled
+        if game.End_Run != nil { game.End_Run(game) }
+        // SDL_Quit is handled by defer in game_run
+        return
+    }
+
+    // Apply GraphicsDeviceManager changes (creates window and device using the now-initialized backend)
     gdm_err := graphics.apply_changes(game.graphics_device_manager)
     if gdm_err != .None {
         log.errorf("Failed to apply graphics device manager changes: %v", gdm_err)
@@ -377,24 +393,36 @@ game_run :: proc(game: ^Game, title: string, width, height: int, preferred_backe
         if game.End_Run != nil { game.End_Run(game) }
         return
     }
-    // After apply_changes, Graphics_Device and Game_Window should be available
+    // After apply_changes, game.graphics_device should be populated by GDM.
     game.graphics_device = game.graphics_device_manager.graphics_device
-    // game.window = game.graphics_device_manager.graphics_device.window_ref // Assuming GD has a window_ref
-    // For now, game.window is populated by GDM.apply_changes if GDM creates it,
-    // or Game creates SDL window and GDM uses it. The current GDM creates SDL window.
-    // Let's assume GDM now populates game.window field, which is ^graphics.Game_Window
-    // This implies GDM's apply_changes needs to set game.window.
-    // This part is messy and needs Graphics_Device to own Game_Window or GDM to manage it.
-    // For now, game.window is populated by GDM.apply_changes (conceptual).
-    if game.graphics_device != nil && game.graphics_device._sdl_window != nil {
-        // If Game.window is distinct from GDM's internal window concept
-        if game.window == nil { game.window = new(graphics.Game_Window, game.allocator_ref)}
-        game.window.sdl_window = game.graphics_device._sdl_window
-        game.window.width = game.graphics_device.present_params.back_buffer_width
-        game.window.height = game.graphics_device.present_params.back_buffer_height
-        // game.window.title = sdl2.GetWindowTitle(cast(^sdl2.Window)game.window.sdl_window) // If needed
-    } else {
-        log.error("GDM.apply_changes did not result in a valid graphics_device and SDL window handle.")
+
+    if game.graphics_device == nil {
+        log.error("GDM.apply_changes did not result in a valid graphics_device.")
+        if game.End_Run != nil { game.End_Run(game) }
+        return
+    }
+    
+    // Now create the Game_Window wrapper using the new graphics.new_window
+    // graphics.new_window itself calls gfx_api.create_window
+    gw, gw_err := graphics.new_window(
+        game.graphics_device,
+        game.window_title_base, // title for the window, passed to game_run
+        width,                  // width from game_run parameters
+        height,                 // height from game_run parameters
+    )
+    if gw_err != .None {
+        log.errorf("Failed to create graphics.Game_Window: %v", gw_err)
+        // Consider what needs to be cleaned up if window creation fails
+        // graphics.destroy_device(game.graphics_device) ? Or is that GDM's role?
+        // For now, just log and exit game_run
+        if game.End_Run != nil { game.End_Run(game) }
+        return
+    }
+    game.window = gw // Assign the newly created Game_Window to game.window
+
+    // Verify that the game.window.gfx_window (the low-level handle) is valid
+    if game.window == nil || game.window.gfx_window.variant == nil {
+         log.error("graphics.new_window did not return a valid Gfx_Window handle.")
         if game.End_Run != nil { game.End_Run(game) }
         return
     }
@@ -505,15 +533,7 @@ run :: proc(
 
 
 // --- Utility functions (previously in core.window or similar) ---
-// These should eventually be methods on Game_Window or provided by Graphics_Device_Manager / Graphics_Device
-get_window_width :: proc(window: ^graphics.Game_Window) -> int {
-    if window != nil { return window.width }
-    return 0
-}
-get_window_height :: proc(window: ^graphics.Game_Window) -> int {
-    if window != nil { return window.height }
-    return 0
-}
+// get_window_width and get_window_height have been moved as methods to graphics.Game_Window.
 // is_valid for Gfx_Device and Gfx_Window placeholder
 is_valid :: proc(device: graphics.Gfx_Device) -> bool { return false } // Placeholder
 // is_valid_window :: proc(window: graphics.Gfx_Window) -> bool { return false } // Placeholder

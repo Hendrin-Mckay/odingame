@@ -18,6 +18,7 @@ import "core:unsafe"
 
 import sdl "vendor:sdl2"
 import gl "vendor:OpenGL/gl"
+import opengl_impl "./opengl" // Import the opengl backend implementations
 
 // --- OpenGL Specific Structs ---
 // These remain largely the same, as they are backend-specific implementation details.
@@ -353,14 +354,8 @@ gl_destroy_shader_impl :: proc(shader: Gfx_Shader) {
 	log.warn("gl_destroy_shader_impl: Not yet implemented.")
 }
 
-gl_create_pipeline_impl :: proc(device: Gfx_Device, desc: types.Gfx_Pipeline_Desc) -> (Gfx_Pipeline, common.Engine_Error) {
-    log.warn("gl_create_pipeline_impl: Not yet implemented.")
-	return Gfx_Pipeline{}, common.Engine_Error.Not_Implemented
-}
-
-gl_destroy_pipeline_impl :: proc(pipeline: Gfx_Pipeline) {
-	log.warn("gl_destroy_pipeline_impl: Not yet implemented.")
-}
+// Removed stub for gl_create_pipeline_impl; actual implementation is in opengl_impl package.
+// Removed stub for gl_destroy_pipeline_impl; actual implementation is in opengl_impl package.
 
 gl_create_buffer_impl :: proc(device: Gfx_Device, type: types.Buffer_Type, size: int, data: rawptr = nil, is_dynamic: bool = false) -> (Gfx_Buffer, common.Engine_Error) {
 	log.warn("gl_create_buffer_impl: Not yet implemented.")
@@ -489,72 +484,9 @@ gl_bind_texture_to_unit_impl :: proc(encoder_or_device_handle: rawptr, texture: 
     return common.Engine_Error.Not_Implemented
 }
 
-gl_set_blend_mode_impl :: proc(device: Gfx_Device, blend_mode: types.Blend_Mode) {
-    // This is a legacy way to set blend mode. Modern approach is via pipeline state.
-    // For GL, this would change global state.
-    _ = device
-    // Based on types.Blend_Mode definition in common_types.odin
-    // This is a simplified mapping. Full blend state is more complex (src/dst factors, ops).
-    // This should ideally be part of pipeline state.
-    switch blend_mode {
-        case .None:
-            gl.Disable(gl.BLEND)
-        case .Alpha:
-            gl.Enable(gl.BLEND)
-            gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-        case .Additive:
-            gl.Enable(gl.BLEND)
-            gl.BlendFunc(gl.SRC_ALPHA, gl.ONE)
-        case .Multiply: // Typically gl.DST_COLOR, gl.ZERO or gl.DST_COLOR, gl.SRC_COLOR depending on effect
-            gl.Enable(gl.BLEND)
-            gl.BlendFunc(gl.DST_COLOR, gl.ZERO) // Common multiply mode
-        case .Premultiplied_Alpha:
-            gl.Enable(gl.BLEND)
-            gl.BlendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
-    }
-    log.warn("gl_set_blend_mode_impl: Used legacy blend mode setting.")
-}
-
-gl_set_depth_test_impl :: proc(device: Gfx_Device, enabled: bool, write: bool, func: types.Depth_Func) {
-    // Legacy state setting. Should be part of pipeline.
-    _ = device
-    if enabled {
-        gl.Enable(gl.DEPTH_TEST)
-        gl.DepthMask(write) // gl.TRUE or gl.FALSE
-        
-        gl_depth_func: u32
-        switch func {
-            case .Always: gl_depth_func = gl.ALWAYS
-            case .Never: gl_depth_func = gl.NEVER
-            case .Less: gl_depth_func = gl.LESS
-            case .Equal: gl_depth_func = gl.EQUAL
-            case .Less_Equal: gl_depth_func = gl.LEQUAL
-            case .Greater: gl_depth_func = gl.GREATER
-            case .Greater_Equal: gl_depth_func = gl.GEQUAL
-            case .Not_Equal: gl_depth_func = gl.NOTEQUAL
-        }
-        gl.DepthFunc(gl_depth_func)
-    } else {
-        gl.Disable(gl.DEPTH_TEST)
-    }
-    log.warn("gl_set_depth_test_impl: Used legacy depth test setting.")
-}
-
-gl_set_cull_mode_impl :: proc(device: Gfx_Device, cull_mode: types.Cull_Mode) {
-    // Legacy state setting. Should be part of pipeline.
-    _ = device
-    switch cull_mode {
-        case .None:
-            gl.Disable(gl.CULL_FACE)
-        case .Front:
-            gl.Enable(gl.CULL_FACE)
-            gl.CullFace(gl.FRONT)
-        case .Back:
-            gl.Enable(gl.CULL_FACE)
-            gl.CullFace(gl.BACK)
-    }
-    log.warn("gl_set_cull_mode_impl: Used legacy cull mode setting.")
-}
+// Removed gl_set_blend_mode_impl
+// Removed gl_set_depth_test_impl
+// Removed gl_set_cull_mode_impl
 
 gl_create_vertex_array_impl :: proc(
     device: Gfx_Device, 
@@ -642,11 +574,11 @@ initialize_sdl_opengl_backend :: proc() {
 	// These should point to actual implementations (e.g., from gl_shader.odin, gl_buffer.odin)
 	// For now, using the stubs defined in this file, which will log warnings.
 	gfx_api.resource_creation = api.Resource_Creation_Interface {
-		create_shader_from_source   = gl_create_shader_from_source_impl,
-		create_shader_from_bytecode = gl_create_shader_from_bytecode_impl,
-		create_pipeline             = gl_create_pipeline_impl,
-		create_buffer               = gl_create_buffer_impl,
-		create_texture              = gl_create_texture_impl,
+		create_shader_from_source   = gl_create_shader_from_source_impl, // Still stubbed here, needs to point to opengl_impl.gl_create_shader_from_source_impl
+		create_shader_from_bytecode = gl_create_shader_from_bytecode_impl, // Still stubbed here
+		create_pipeline             = opengl_impl.gl_create_pipeline_impl, // Points to new implementation
+		create_buffer               = gl_create_buffer_impl, // Still stubbed here
+		create_texture              = gl_create_texture_impl, // Still stubbed here
         create_framebuffer          = gl_create_framebuffer_impl,
         create_render_pass          = gl_create_render_pass_impl,
         create_vertex_array         = gl_create_vertex_array_impl,
@@ -654,10 +586,10 @@ initialize_sdl_opengl_backend :: proc() {
 
 	// Populate the Resource_Management_Interface part
 	gfx_api.resource_management = api.Resource_Management_Interface {
-		destroy_shader     = gl_destroy_shader_impl,
-		destroy_pipeline   = gl_destroy_pipeline_impl,
-		update_buffer      = gl_update_buffer_impl,
-		destroy_buffer     = gl_destroy_buffer_impl,
+		destroy_shader     = gl_destroy_shader_impl, // Still stubbed here
+		destroy_pipeline   = opengl_impl.gl_destroy_pipeline_impl, // Points to new implementation
+		update_buffer      = gl_update_buffer_impl, // Still stubbed here
+		destroy_buffer     = gl_destroy_buffer_impl, // Still stubbed here
         map_buffer         = gl_map_buffer_impl,
         unmap_buffer       = gl_unmap_buffer_impl,
 		update_texture     = gl_update_texture_impl,
@@ -692,9 +624,9 @@ initialize_sdl_opengl_backend :: proc() {
 		set_uniform_int      = gl_set_uniform_int_impl,
 		set_uniform_float    = gl_set_uniform_float_impl,
 		bind_texture_to_unit = gl_bind_texture_to_unit_impl,
-        set_blend_mode       = gl_set_blend_mode_impl, // Legacy
-        set_depth_test       = gl_set_depth_test_impl, // Legacy
-        set_cull_mode        = gl_set_cull_mode_impl,  // Legacy
+        // Removed: set_blend_mode       = gl_set_blend_mode_impl,
+        // Removed: set_depth_test       = gl_set_depth_test_impl,
+        // Removed: set_cull_mode        = gl_set_cull_mode_impl,
         bind_vertex_array    = gl_bind_vertex_array_impl,
 	}
 

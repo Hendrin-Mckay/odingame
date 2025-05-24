@@ -19,8 +19,8 @@ State_Setting_Interface :: struct {
 	set_uniform_int: proc(encoder_or_device_handle: rawptr, pipeline: graphics.Gfx_Pipeline, name: string, val: i32) -> common.Engine_Error,
 	set_uniform_float: proc(encoder_or_device_handle: rawptr, pipeline: graphics.Gfx_Pipeline, name: string, val: f32) -> common.Engine_Error,
 	bind_texture_to_unit: proc(encoder_or_device_handle: rawptr, texture: graphics.Gfx_Texture, unit: u32, stage: types.Shader_Stage) -> common.Engine_Error,
-	set_blend_mode: proc(device: graphics.Gfx_Device, blend_mode: types.Blend_Mode),
-	set_depth_test: proc(device: graphics.Gfx_Device, enabled: bool, write: bool, func: types.Depth_Func),
-	set_cull_mode: proc(device: graphics.Gfx_Device, cull_mode: types.Cull_Mode),
+	// Removed: set_blend_mode: proc(device: graphics.Gfx_Device, blend_mode: types.Blend_Mode),
+	// Removed: set_depth_test: proc(device: graphics.Gfx_Device, enabled: bool, write: bool, func: types.Depth_Func),
+	// Removed: set_cull_mode: proc(device: graphics.Gfx_Device, cull_mode: types.Cull_Mode),
 	bind_vertex_array: proc(device: graphics.Gfx_Device, vao: graphics.Gfx_Vertex_Array),
 }

@@ -16,154 +16,151 @@ import "core:math/linalg"
 import "core:os" // For command line arguments
 import ocontent "../../odingame/content" // Import Content_Manager package
 
-// Global game variables
-player_texture: ^ogfx.Texture2D // Changed to pointer to new Texture2D struct
-player_pos: omath.Vector2f
-player_speed: f32 = 200.0 // pixels per second
+// MyGame struct to hold game state
+MyGame :: struct {
+    using game:    ^ocore.Game,     // Access to core game object
+    texture:       ^ogfx.Texture2D, // Player's texture
+    pos:           omath.Vector2f,  // Player's position
+    player_speed:  f32,             // Player's movement speed
+}
+
+// Player speed constant (can be part of MyGame or remain global if truly constant)
+// For this refactor, player_speed is moved into MyGame.
+// PLAYER_SPEED :: 200.0 // pixels per second // Example if it were a constant
 
 // --- Game Functions ---
 
 game_initialize :: proc(game: ^ocore.Game) {
     fmt.println("Game Initialize")
-    // game specific initialization if any
+    // Allocate and initialize MyGame state
+    game.user_data = new(MyGame)
+    state := (^MyGame)(game.user_data)
+    state.game = game // Set the 'using game' field
+    state.player_speed = 200.0 // Initialize player_speed from the former global
+    // state.texture will be loaded in game_load_content
+    // state.pos will be initialized in game_load_content after texture is loaded
 }
 
 game_load_content :: proc(game: ^ocore.Game) {
     fmt.println("Game Load Content")
-    // Use the new texture loading function which requires Gfx_Device
-    // The asset path should be relative to the executable or an assets directory.
-    // Assuming "assets/sprite.png" is the correct path relative to where the example is run from.
-    // The README.md for OdinGame main project shows "assets/sprite.png" for its example.
-    asset_path := "assets/sprite.png" 
-    // If running from `odingame/examples/simple_game`, path might be "../../assets/sprite.png" if assets is at root.
-    // For now, let's assume 'assets/sprite.png' will be found if CWD is odingame root.
-    // For a more robust solution, the example could try multiple relative paths or require assets to be copied.
-    // The original example used "examples/simple_game/sprite.png"
-    
-    // Corrected path assuming CWD is odingame root, or assets are copied to example dir.
-    // For this test, let's use a path that is usually valid when running from example dir.
-    // The original example likely assumed CWD was the example dir.
-    // For now, to match the prior structure of the example:
-    texture_file_path := "sprite.png" // Assumes sprite.png is next to the executable or found via search paths.
-                                      // Or, more robustly: "examples/simple_game/sprite.png" if CWD is repo root.
-                                      // Let's use "examples/simple_game/sprite.png" for consistency with prior code.
-    // Content_Manager's root is "assets" by default in core.Game.
-    // So, "sprite.png" will look for "assets/sprite.png".
-    // If the example's assets are in "examples/simple_game/assets/", then Content_Manager root should be set accordingly,
-    // or the asset path here should be "examples/simple_game/sprite.png".
-    // For now, let's assume the asset is located at "assets/sprite.png" relative to executable,
-    // and ContentManager root is "assets".
-    asset_to_load := "sprite.png" // This will be searched as "assets/sprite.png"
+    state := (^MyGame)(game.user_data)
 
-    tex, err := ocontent.content_load_texture2D(game.content, asset_to_load)
+    // Asset path (assuming "assets/sprite.png" relative to where content manager looks)
+    asset_to_load := "sprite.png" 
+
+    tex, err := ocontent.content_load_texture2D(state.content, asset_to_load) // Use state.content
     if err != .None { 
         fmt.eprintln("Failed to load texture '", asset_to_load, "': ", ocommon.engine_error_to_string(err))
-        // player_texture remains nil
+        state.texture = nil // Ensure texture is nil on failure
     } else {
-        player_texture = tex // tex is ^ogfx.Texture2D
+        state.texture = tex
         fmt.println("Loaded texture '", asset_to_load, "' successfully!")
     }
     
     player_w: f32 = 0
     player_h: f32 = 0
-    // Use the new Texture2D struct fields and check if pointer is nil
-    if player_texture != nil && !ogfx.is_texture_disposed(player_texture) {
-        player_w = f32(player_texture.width)
-        player_h = f32(player_texture.height)
+    if state.texture != nil && !ogfx.is_texture_disposed(state.texture) {
+        player_w = f32(state.texture.width)
+        player_h = f32(state.texture.height)
     }
 
-    player_pos = omath.Vector2f{
-        f32(ocore.get_window_width(game.window))/2 - player_w/2, 
-        f32(ocore.get_window_height(game.window))/2 - player_h/2,
+    // Initialize player position using window dimensions from state.window
+    state.pos = omath.Vector2f{
+        f32(ocore.get_window_width(state.window))/2 - player_w/2, 
+        f32(ocore.get_window_height(state.window))/2 - player_h/2,
     }
 }
 
 game_update :: proc(game: ^ocore.Game, game_time: ocore.GameTime) {
+    state := (^MyGame)(game.user_data)
     delta_time := f32(game_time.elapsed_game_time)
-    move_amount := player_speed * delta_time
+    move_amount := state.player_speed * delta_time // Use state.player_speed
 
     // Input uses the new XNA-style input API
-    kb_state := oinput.keyboard_get_state()
+    // kb_state is obtained via oinput, which doesn't depend on game state directly here.
+    // However, if input handling needed game instance, it would be state.input_system or similar.
+    kb_state := oinput.keyboard_get_state() 
 
     if oinput.keyboard_state_is_key_down(kb_state, .Left) {
-        player_pos.x -= move_amount
+        state.pos.x -= move_amount // Use state.pos
     }
     if oinput.keyboard_state_is_key_down(kb_state, .Right) {
-        player_pos.x += move_amount
+        state.pos.x += move_amount // Use state.pos
     }
     if oinput.keyboard_state_is_key_down(kb_state, .Up) {
-        player_pos.y -= move_amount
+        state.pos.y -= move_amount // Use state.pos
     }
     if oinput.keyboard_state_is_key_down(kb_state, .Down) {
-        player_pos.y += move_amount
+        state.pos.y += move_amount // Use state.pos
     }
     
     // Example of using "is_key_pressed" for a one-shot action
-    // if oinput.keyboard_is_key_pressed(.Space) {
+    // if oinput.keyboard_is_key_pressed(.Space) { // Assuming oinput.keyboard_is_key_pressed takes state.input if needed
     //    fmt.println("Space pressed this frame!")
     // }
 
-
     // Boundaries (simple wrap around for now)
-    // Ensure player_pos does not go too far off screen before wrapping
     player_w := f32(0)
     player_h := f32(0)
-    if player_texture != nil && !ogfx.is_texture_disposed(player_texture) {
-        player_w = f32(player_texture.width)
-        player_h = f32(player_texture.height)
+    if state.texture != nil && !ogfx.is_texture_disposed(state.texture) { // Use state.texture
+        player_w = f32(state.texture.width)
+        player_h = f32(state.texture.height)
     }
 
-    window_w := f32(ocore.get_window_width(game.window))
-    window_h := f32(ocore.get_window_height(game.window))
+    // Access window through state.window due to 'using game'
+    window_w := f32(ocore.get_window_width(state.window)) 
+    window_h := f32(ocore.get_window_height(state.window))
 
-    if player_pos.x + player_w < 0 { player_pos.x = window_w }
-    if player_pos.x > window_w { player_pos.x = -player_w }
-    if player_pos.y + player_h < 0 { player_pos.y = window_h }
-    if player_pos.y > window_h { player_pos.y = -player_h }
+    if state.pos.x + player_w < 0 { state.pos.x = window_w } // Use state.pos
+    if state.pos.x > window_w { state.pos.x = -player_w }    // Use state.pos
+    if state.pos.y + player_h < 0 { state.pos.y = window_h } // Use state.pos
+    if state.pos.y > window_h { state.pos.y = -player_h }    // Use state.pos
 
     // Use the new "is_key_pressed" which checks current vs previous state
-    if oinput.keyboard_is_key_pressed(.Escape) { // Note: .Escape not .ESCAPE for Keys enum
-        ocore.exit(game)
+    // oinput.keyboard_is_key_pressed might need state.input if it depends on game instance state.
+    // For now, assuming .Escape is a global key state.
+    if oinput.keyboard_is_key_pressed(.Escape) { 
+        ocore.exit(state.game) // Pass state.game or just state (if 'using game' propagates for ocore.exit)
+                               // Safest is state.game as ocore.exit expects ^ocore.Game
     }
 }
 
 game_draw :: proc(game: ^ocore.Game, game_time: ocore.GameTime) {
-    // Clear screen using gfx_api
-    // Cornflower Blue: R=100, G=149, B=237 -> normalized: 0.39, 0.58, 0.93
-    clear_color := [4]f32{100/255, 149/255, 237/255, 1.0}
-    clear_options := ogfx.Clear_Options{
-        color = clear_color,
-        clear_color = true,
-        clear_depth = true, // Assuming depth buffer is used or available
-        depth = 1.0,
-    }
-    ogfx.clear_screen(game.window.gfx_device, game.window.gfx_window, {.Cornflower_Blue}) // Use named color
+    state := (^MyGame)(game.user_data)
 
-    // Begin SpriteBatch with an orthographic projection
+    // Clear screen using gfx_api (via state.graphics_device)
+    // Cornflower Blue: R=100, G=149, B=237 -> normalized: 0.39, 0.58, 0.93
+    // clear_color := [4]f32{100/255, 149/255, 237/255, 1.0} // This variable is not used if using named color
+    // clear_options := ogfx.Clear_Options{ // This variable is not used by graphics_device_clear
+    //     color = clear_color,
+    //     clear_color = true,
+    //     clear_depth = true, 
+    //     depth = 1.0,
+    // }
+    ogfx.graphics_device_clear(state.graphics_device, ocore.Cornflower_Blue, clear_depth=true, clear_stencil=false)
+
+    // Begin SpriteBatch with an orthographic projection (using state.window and state.sprite_batch)
     proj_matrix := linalg.orthographic_rh_zo(
         0, 
-        f32(ocore.get_window_width(game.window)), 
-        f32(ocore.get_window_height(game.window)), 
+        f32(ocore.get_window_width(state.window)), 
+        f32(ocore.get_window_height(state.window)), 
         0, 
         -1, 
         1,
     )
-    // For XNA-like SpriteBatch, Begin takes parameters. Using defaults for now.
-    // The matrix is passed to Begin.
-    ogfx.sprite_batch_begin(game.sprite_batch, transform_matrix = proj_matrix)
+    ogfx.sprite_batch_begin(state.sprite_batch, transform_matrix = proj_matrix)
 
-    if player_texture != nil && !ogfx.is_texture_disposed(player_texture) {
-        // Draw player sprite using the new SpriteBatch draw_texture method
-        // This now needs to take ^ogfx.Texture2D
-        ogfx.sprite_batch_draw_texture(game.sprite_batch, player_texture, player_pos, ocore.WHITE)
+    if state.texture != nil && !ogfx.is_texture_disposed(state.texture) { // Use state.texture
+        // Draw player sprite using state.texture and state.pos
+        ogfx.sprite_batch_draw_texture(state.sprite_batch, ogfx.get_internal_gfx_texture(state.texture), state.pos, ocore.WHITE)
     } else {
         // Player texture not loaded or invalid
     }
     
-    ogfx.sprite_batch_end(game.sprite_batch)
+    ogfx.sprite_batch_end(state.sprite_batch)
 
-    // Present the window using gfx_api
-    ogfx.present_window(game.window.gfx_window) // Use the direct present_window from graphics package
+    // Present the window using gfx_api (via state.window)
+    ogfx.present_window(state.window.gfx_window)
 }
 
 // --- Main ---

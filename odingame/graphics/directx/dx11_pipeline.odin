@@ -154,14 +154,69 @@ create_pipeline_impl :: proc(
     vs_bytecode_ptr := Blob_GetBufferPointer(vs_internal_variant.bytecode_blob)
     vs_bytecode_size := Blob_GetBufferSize(vs_internal_variant.bytecode_blob)
 
-    num_elements := len(pipeline_desc.vertex_layout.attributes)
-    if num_elements > 0 { // Only create input layout if attributes are defined
-        input_element_descs := make([]D3D11_INPUT_ELEMENT_DESC, num_elements, temp_alloc)
-        defer delete(input_element_descs) // Clean up temporary slice
+    // --- Input Layout: Adjusted to use vertex_buffer_layouts ---
+    // Assuming we use the first vertex buffer layout for D3D11 input layout.
+    // D3D11 input layout is monolithic. If multiple buffer layouts are intended 
+    // to be interleaved or used distinctly, this part might need more complex handling
+    // to map to D3D11's input slots. For now, using layout from buffer_layouts[0].
+    if len(pipeline_desc.vertex_buffer_layouts) == 0 || pipeline_desc.vertex_buffer_layouts[0].layout.attributes == nil {
+        log.debug("DX11: create_pipeline_impl: No vertex attributes defined in pipeline_desc.vertex_buffer_layouts[0]. Skipping InputLayout creation.")
+        pipeline_internal.input_layout = nil // No attributes, no input layout
+    } else {
+        vertex_layout_for_ia := pipeline_desc.vertex_buffer_layouts[0].layout
+        num_elements := len(vertex_layout_for_ia.attributes)
+        
+        if num_elements > 0 {
+            input_element_descs := make([]D3D11_INPUT_ELEMENT_DESC, num_elements, temp_alloc)
+            defer delete(input_element_descs) // Clean up temporary slice
 
-        for i, attr in pipeline_desc.vertex_layout.attributes {
-            semantic_name_cstr := strings.clone_to_cstring(attr.semantic_name, temp_alloc)
-            defer delete(semantic_name_cstr) // Defer deletion for each C-string
+            for i, attr in vertex_layout_for_ia.attributes {
+                // attr.name was used in the previous version of Gfx_Vertex_Attribute,
+                // the common_types.odin Gfx_Vertex_Attribute has `name: string` for semantic name.
+                // The gfx_interface.Vertex_Attribute (which seems to be used by the old code for pipeline_desc.vertex_layout.attributes)
+                // had `semantic_name: string`. Assuming `attr.name` is the correct field now from gfx_types.Vertex_Attribute.
+                // The `attr.semantic_name` was from `gfx_interface.Vertex_Attribute`.
+                // The current `gfx_types.Vertex_Attribute` has `name: string`.
+                // This needs to be consistent. The subtask description implies Gfx_Pipeline_Desc
+                // now uses gfx_types.Vertex_Buffer_Layout_Desc -> gfx_types.Gfx_Vertex_Layout_Desc -> [dynamic]gfx_types.Vertex_Attribute
+                // and gfx_types.Vertex_Attribute has `name: string`.
+                // The old code in dx11_pipeline.odin used `attr.semantic_name`. This must be updated to `attr.name`.
+                semantic_name_cstr := strings.clone_to_cstring(attr.name, temp_alloc) // Changed from attr.semantic_name
+                defer delete(semantic_name_cstr)
+
+                dxgi_fmt, fmt_ok := to_dxgi_vertex_format(attr.format)
+                if !fmt_ok {
+                    return gfx_interface.Gfx_Pipeline{}, .Invalid_Parameter
+                }
+
+                input_element_descs[i] = D3D11_INPUT_ELEMENT_DESC{
+                    SemanticName      = semantic_name_cstr,
+                    SemanticIndex     = UINT(attr.location), // Assuming location is used as semantic index
+                    Format            = dxgi_fmt,
+                    InputSlot         = UINT(pipeline_desc.vertex_buffer_layouts[0].buffer_index), // Use buffer_index from layout
+                    AlignedByteOffset = UINT(attr.offset), // Changed from attr.offset_in_bytes
+                    InputSlotClass    = .PER_VERTEX_DATA, // Assuming per-vertex for now; step_rate is on the layout
+                    InstanceDataStepRate = 0, // Set to 1 for per-instance data if step_rate is .Per_Instance
+                }
+                if pipeline_desc.vertex_buffer_layouts[0].layout.step_rate == .Per_Instance {
+                    input_element_descs[i].InputSlotClass = .PER_INSTANCE_DATA
+                    input_element_descs[i].InstanceDataStepRate = 1 // Or a configurable step rate
+                }
+            }
+            
+            hr = Device_CreateInputLayout(di.device, &input_element_descs[0], UINT(num_elements), 
+                                          vs_bytecode_ptr, vs_bytecode_size, &pipeline_internal.input_layout)
+            if FAILED(hr) {
+                log.errorf("DX11: Device_CreateInputLayout failed. HRESULT: %X", hr)
+                return gfx_interface.Gfx_Pipeline{}, .Graphics_Resource_Creation_Failed
+            }
+        } else {
+            pipeline_internal.input_layout = nil // No attributes, no input layout
+        }
+    }
+
+
+    // --- 2. Blend State ---
 
             dxgi_fmt, fmt_ok := to_dxgi_vertex_format(attr.format)
             if !fmt_ok {
@@ -376,21 +431,5 @@ set_pipeline_impl :: proc(device_handle: gfx_interface.Gfx_Device, pipeline_hand
 }
 
 
-// Individual state setters - these are complex with immutable D3D11 states.
-// For now, they are mostly not implemented or would require a PSO cache/recreation system.
-set_blend_mode_impl :: proc(device: gfx_interface.Gfx_Device, enabled: bool, src_factor: gfx_interface.Blend_Factor, dst_factor: gfx_interface.Blend_Factor, op: gfx_interface.Blend_Op) -> common.Engine_Error {
-    log.warn("DX11: set_blend_mode_impl is a simplified stub. Full dynamic state changes require PSO management not yet implemented. Use create_pipeline for full control.")
-    // This would require finding/creating a D3D11_BLEND_STATE object that matches these parameters
-    // and then calling OMSetBlendState. This is non-trivial.
-    return .Not_Implemented
-}
-
-set_depth_test_impl :: proc(device: gfx_interface.Gfx_Device, enabled: bool, write_enable: bool, compare_op: gfx_interface.Comparison_Func) -> common.Engine_Error {
-    log.warn("DX11: set_depth_test_impl is a simplified stub. Full dynamic state changes require PSO management not yet implemented. Use create_pipeline for full control.")
-    return .Not_Implemented
-}
-
-set_cull_mode_impl :: proc(device: gfx_interface.Gfx_Device, cull_mode: gfx_interface.Cull_Mode, front_winding: gfx_interface.Winding_Order) -> common.Engine_Error {
-    log.warn("DX11: set_cull_mode_impl is a simplified stub. Full dynamic state changes require PSO management not yet implemented. Use create_pipeline for full control.")
-    return .Not_Implemented
-}
+// Removed set_blend_mode_impl, set_depth_test_impl, and set_cull_mode_impl
+// as these states are now exclusively managed via Gfx_Pipeline_Desc.

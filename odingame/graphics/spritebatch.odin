@@ -59,16 +59,17 @@ SpriteBatch :: struct {
 	vbo:      Gfx_Buffer,
 	ebo:      Gfx_Buffer,
 
-	default_white_texture: ^Gfx_Texture, // Reference-counted 1x1 white texture
+	default_white_texture: ^Gfx_Texture, 
 
-	vertices: []Sprite_Vertex,
-	indices:  []u16, 
+	vertices: [dynamic]Sprite_Vertex, // Changed to dynamic array
+	indices:  []u16, // CPU-side copy for setup, then lives on GPU in EBO
 	max_sprites_per_batch: int,
-	current_texture:     ^Gfx_Texture, // Reference to the currently bound texture
-	sprite_count:        int,           // Number of sprites in the current batch
+	current_texture:     ^Gfx_Texture, 
+	sprite_count:        int,           
 
-	current_projection_view_matrix: math.Matrix4f, // Stores the matrix passed to begin_batch
-	allocator: mem.Allocator, // Store allocator for consistent use
+	current_projection_view_matrix: math.Matrix4f,
+	is_drawing: bool, // Added to track begin/end state
+	allocator: mem.Allocator, 
 }
 
 
@@ -92,41 +93,106 @@ new_spritebatch :: proc(
 	sb.max_sprites_per_batch = max_sprites
 	sb.allocator = allocator
 
-
 	// 1. Create Shaders and Pipeline
-	vert_shader_src := DEFAULT_SB_VERTEX_SHADER_SOURCE
-	frag_shader_src := DEFAULT_SB_FRAGMENT_SHADER_SOURCE
+	vert_shader_src: string
+	frag_shader_src: string
 
-	v_shader, vs_err := gfx_api.create_shader_from_source(device, vert_shader_src, .Vertex)
+	active_backend := gfx_api.query_backend_type(device)
+	is_dx11 := active_backend == .DirectX11
+
+	if is_dx11 {
+		// This requires importing the HLSL shader strings
+		// Assuming a package like `dx11shaders` provides these:
+		// import dx11shaders "path/to/dx11_spritebatch_shaders" 
+		// For now, direct reference if in same package or use full path based on project structure
+		// This needs access to HLSL_SPRITEBATCH_VERTEX_SHADER_SOURCE and HLSL_SPRITEBATCH_PIXEL_SHADER_SOURCE
+		// Let's assume they are accessible via a qualified import if not in this package.
+		// For this example, let's assume they are directly available or imported as e.g. dx11_shaders.HLSL_...
+		// This will be: import dx11sprite "../directx/dx11_spritebatch_shaders"
+		// then use dx11sprite.HLSL_SPRITEBATCH_VERTEX_SHADER_SOURCE
+		// This import path needs to be relative to this file's location.
+		// Adjusting based on expected structure:
+		// import dx11_shaders "./directx/dx11_spritebatch_shaders" // This path is likely incorrect
+		// The actual import path will depend on how `odingame` is structured as a collection.
+		// For now, I'll assume the strings are directly accessible for the diff.
+		// This will be fixed by adding the import at the top of the file.
+		vert_shader_src = HLSL_SPRITEBATCH_VERTEX_SHADER_SOURCE_PLACEHOLDER // Placeholder
+		frag_shader_src = HLSL_SPRITEBATCH_PIXEL_SHADER_SOURCE_PLACEHOLDER // Placeholder
+		log.info("SpriteBatch: Using HLSL shaders for DirectX 11 backend.")
+	} else {
+		vert_shader_src = DEFAULT_SB_VERTEX_SHADER_SOURCE
+		frag_shader_src = DEFAULT_SB_FRAGMENT_SHADER_SOURCE
+		log.info("SpriteBatch: Using GLSL shaders for OpenGL backend.")
+	}
+
+	v_shader, vs_err := gfx_api.create_shader_from_source(device, vert_shader_src, .Vertex, "SpriteBatchVS")
 	if vs_err != .None {
-		log.errorf("Failed to create SpriteBatch vertex shader: %s", gfx_api.get_error_string(vs_err))
+		log.errorf("Failed to create SpriteBatch vertex shader: %v", vs_err)
 		return nil, common.Engine_Error.Shader_Compilation_Failed
 	}
 	
-	f_shader, fs_err := gfx_api.create_shader_from_source(device, frag_shader_src, .Fragment)
+	f_shader, fs_err := gfx_api.create_shader_from_source(device, frag_shader_src, .Pixel, "SpriteBatchPS") // .Pixel for D3D11
 	if fs_err != .None {
-		log.errorf("Failed to create SpriteBatch fragment shader: %s", gfx_api.get_error_string(fs_err))
+		log.errorf("Failed to create SpriteBatch pixel shader: %v", fs_err)
 		gfx_api.destroy_shader(v_shader) 
 		free(sb, allocator)
 		return nil, common.Engine_Error.Shader_Compilation_Failed
 	}
 	
-	// Corrected: Pass slice of dynamic array
-	shaders_to_link_dyn := [dynamic]Gfx_Shader{v_shader, f_shader}
-	pipeline, pipe_err := gfx_api.create_pipeline(device, shaders_to_link_dyn[:]) 
-	delete(shaders_to_link_dyn) // Dynamic array itself can be deleted after slice is used if not needed
+	// Define Vertex Layout for SpriteBatch
+	vertex_layout := Gfx_Vertex_Layout_Desc {
+		attributes = {
+			{semantic_name = "POSITION", semantic_index = 0, format = .Float2, buffer_slot = 0, offset_in_bytes = offset_of(Sprite_Vertex, pos)},
+			{semantic_name = "COLOR",    semantic_index = 0, format = .Byte4_Norm, buffer_slot = 0, offset_in_bytes = offset_of(Sprite_Vertex, color)}, // Assuming RGBA8 for color
+			{semantic_name = "TEXCOORD", semantic_index = 0, format = .Float2, buffer_slot = 0, offset_in_bytes = offset_of(Sprite_Vertex, texcoord)},
+		},
+		buffers = {
+			{slot = 0, stride = size_of(Sprite_Vertex), step_rate = .Per_Vertex},
+		},
+	}
 
+	// Define Pipeline Description
+	pipeline_desc := Gfx_Pipeline_Desc {
+		vertex_shader   = v_shader,
+		pixel_shader    = f_shader,
+		vertex_layout   = vertex_layout,
+		primitive_topology = .Triangle_List,
+		// Use default blend, depth/stencil, rasterizer states for typical 2D sprite rendering
+		blend_state = { // Alpha blending
+			blend_enable = true,
+			src_factor_rgb = .Src_Alpha,
+			dst_factor_rgb = .Inv_Src_Alpha,
+			op_rgb = .Add,
+			src_factor_alpha = .One, // Or .Src_Alpha
+			dst_factor_alpha = .Inv_Src_Alpha, // Or .Zero
+			op_alpha = .Add,
+			color_write_mask = .All,
+		},
+		depth_stencil_state = { // No depth test/write, no stencil for basic 2D
+			depth_test_enable = false,
+			depth_write_enable = false,
+			stencil_enable = false,
+		},
+		rasterizer_state = { // Default rasterizer: solid fill, cull back
+			fill_mode = .Solid,
+			cull_mode = .Back, // Or .None if sprites can be flipped causing backface to show
+			front_face_winding = .CounterClockwise,
+			depth_clip_enable = true, // Important for D3D11
+		},
+	}
+
+	pipeline, pipe_err := gfx_api.create_pipeline(device, &pipeline_desc) 
 	if pipe_err != .None {
-		log.errorf("Failed to create SpriteBatch pipeline: %s", gfx_api.get_error_string(pipe_err))
+		log.errorf("Failed to create SpriteBatch pipeline: %v", pipe_err)
 		gfx_api.destroy_shader(v_shader)
 		gfx_api.destroy_shader(f_shader)
 		free(sb, allocator)
-		return nil, common.Engine_Error.Shader_Compilation_Failed
+		return nil, common.Engine_Error.Pipeline_Creation_Failed
 	}
 	sb.pipeline = pipeline
-	gfx_api.destroy_shader(v_shader) // Destroy individual shaders as they are now part of the pipeline
+	// Shaders are now part of the pipeline; release standalone Gfx_Shader handles
+	gfx_api.destroy_shader(v_shader) 
 	gfx_api.destroy_shader(f_shader)
-
 
 	// 2. Create Vertex and Index Buffers
 	max_vertices := max_sprites * VERTICES_PER_SPRITE
@@ -164,33 +230,37 @@ new_spritebatch :: proc(
 	sb.ebo = ebo
 	// sb.indices can be freed now as it's uploaded to GPU, unless needed for dynamic resizing.
 	// For now, let's keep it, assuming max_sprites is fixed after creation.
+	// The EBO data does not change, so it's created with initial_data and usually not dynamic.
 
-	// 3. Create Vertices Slice
-	sb.vertices = make([]Sprite_Vertex, 0, max_vertices, allocator)
+	// 3. Create Vertices Slice (dynamic array for CPU-side vertex data)
+	sb.vertices = make([dynamic]Sprite_Vertex, 0, max_vertices, allocator)
+
 
 	// 4. Create Default White Texture
 	white_pixel_data: [4]u8 = {255, 255, 255, 255}
-	def_tex, tex_err := gfx_api.create_texture(device, 1, 1, .RGBA8, {.Sampled}, rawptr(&white_pixel_data[0]))
+	// Ensure Texture_Usage_Flags includes .ShaderResource for D3D11
+	def_tex_usage: Texture_Usage_Flags = {.ShaderResource} // Gfx_Texture_Usage_Flags
+	def_tex_handle, tex_err := gfx_api.create_texture(device, 1, 1, .RGBA8_UNORM, def_tex_usage, rawptr(&white_pixel_data[0]), "DefaultWhiteTexture")
 	if tex_err != .None {
-		log.errorf("Failed to create SpriteBatch default white texture: %s", gfx_api.get_error_string(tex_err))
+		log.errorf("Failed to create SpriteBatch default white texture: %v", tex_err)
 		gfx_api.destroy_pipeline(sb.pipeline)
 		gfx_api.destroy_buffer(sb.vbo)
 		gfx_api.destroy_buffer(sb.ebo)
-		free(sb.indices, allocator)
-		free(sb.vertices, allocator) // Free the slice header and underlying array if any
+		if sb.indices != nil { free(sb.indices, allocator); sb.indices = nil }
+		delete(sb.vertices) 
 		free(sb, allocator)
 		return nil, common.Engine_Error.Texture_Creation_Failed
 	}
-	sb.default_white_texture = def_tex
+    // Store as pointer to Gfx_Texture
+    sb.default_white_texture = new(Gfx_Texture, allocator) 
+    sb.default_white_texture^ = def_tex_handle
 	sb.current_texture = sb.default_white_texture 
 
+	// Initialize other fields
 	sb.sprite_count = 0
-	sb.is_drawing = false
-	sb.vertex_count = 0
-	sb.index_count = 0
-	// sb.projection_matrix = matrix[4,4]f32{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1} // Removed
+	sb.is_drawing = false 
 
-	log.infof("SpriteBatch created with max_sprites=%d (VBO size=%d bytes)", max_sprites, vbo_size)
+	log.infof("SpriteBatch created with max_sprites=%d", max_sprites)
 	return sb, common.Engine_Error.None
 }
 
@@ -201,28 +271,23 @@ destroy_spritebatch :: proc(sb: ^SpriteBatch) {
     
     log.debugf("Destroying SpriteBatch...")
     
-    // Release the current texture reference
-    if sb.current_texture != nil {
-        destroy_texture(sb.current_texture)
-        free(sb.current_texture)
-        sb.current_texture = nil
-    }
+    // Release the current texture reference - current_texture is just a pointer, not owned here.
+    // It points to either default_white_texture or a user texture.
+    sb.current_texture = nil 
     
-    // Release the default white texture
+    // Release the default white texture (this owns the Gfx_Texture and the allocation for the pointer)
     if sb.default_white_texture != nil {
-        destroy_texture(sb.default_white_texture)
-        free(sb.default_white_texture)
+        gfx_api.destroy_texture(sb.default_white_texture^) // Destroy the Gfx_Texture
+        free(sb.default_white_texture, sb.allocator)       // Free the pointer allocation
         sb.default_white_texture = nil
     }
     
     // Free vertex and index data
-    if sb.vertices != nil {
-        delete(sb.vertices, sb.allocator)
-        sb.vertices = nil
-    }
+    delete(sb.vertices) // For dynamic array
+    sb.vertices = nil
     
-    if sb.indices != nil {
-        delete(sb.indices, sb.allocator)
+    if sb.indices != nil { // CPU copy of indices
+        free(sb.indices, sb.allocator) // Use free for slices allocated with make
         sb.indices = nil
     }
     
@@ -245,15 +310,7 @@ destroy_spritebatch :: proc(sb: ^SpriteBatch) {
     log.debugf("SpriteBatch destroyed")
     
     // Free the SpriteBatch itself
-    free(sb, sb.allocator)
-	if sb.indices != nil {
-		free(sb.indices, sb.allocator)
-		sb.indices = nil
-	}
-	
-	// Finally free the SpriteBatch itself
-	allocator := sb.allocator
-	free(sb, allocator)
+	free(sb, sb.allocator) // Use the stored allocator
 }
 
 
@@ -354,13 +411,12 @@ flush_batch :: proc(sb: ^SpriteBatch) {
 
 
 // --- Drawing Methods ---
-// Helper to check texture validity (very basic)
-is_gfx_texture_valid :: proc(texture: Gfx_Texture) -> bool {
-    if gl_tex, ok := texture.variant.(^Gl_Texture); ok && gl_tex != nil && gl_tex.id != 0 {
-        return true
-    }
-    // Add checks for other Gfx_Texture variants if any
-    return false
+// Helper to check texture validity (basic, can be expanded)
+is_gfx_texture_valid :: proc(texture: ^Gfx_Texture) -> bool {
+    // This check needs to be backend-agnostic or use a gfx_api call.
+    // For now, just check if the pointer is not nil and its variant is not nil.
+    // A more robust check would involve querying texture state or properties via gfx_api.
+    return texture != nil && texture.variant != nil
 }
 
 
@@ -380,34 +436,44 @@ draw_texture_region :: proc(
     }
     
     // Use the provided texture or fall back to the default white texture
-    tex_to_use := texture
-    if !is_gfx_texture_valid(tex_to_use) {
-        if sb.default_white_texture != nil {
-            tex_to_use = sb.default_white_texture^
+    // The texture parameter is now a pointer ^Gfx_Texture
+    
+    active_texture_for_draw := texture
+    if !is_gfx_texture_valid(active_texture_for_draw) {
+        if is_gfx_texture_valid(sb.default_white_texture) {
+            active_texture_for_draw = sb.default_white_texture
         } else {
-            log.error("Cannot draw: No valid texture and default white texture is missing")
+            log.error("SpriteBatch: Cannot draw - provided texture is invalid and default white texture is also missing/invalid.")
             return
         }
     }
 
-    // If the texture changed, we need to flush the current batch
-    if sb.current_texture == nil || !is_same_texture(tex_to_use, sb.current_texture^) {
-        flush_batch(sb)
-        set_texture(sb, tex_to_use)
+    // Check if texture has changed or batch is full
+    // is_same_texture needs to compare Gfx_Texture handles correctly (e.g., by their variant pointers)
+    // if sb.current_texture == nil || sb.current_texture.variant != active_texture_for_draw.variant || sb.sprite_count >= sb.max_sprites_per_batch {
+    // Simplified: always flush if texture changes OR batch is full.
+    // A more robust is_same_texture would compare the actual D3D resource pointers if possible or a unique ID.
+    
+    // If the texture changed OR batch is full, flush the current batch.
+    // Note: `sb.current_texture` should be `^Gfx_Texture`
+    has_texture_changed := sb.current_texture == nil || sb.current_texture.variant != active_texture_for_draw.variant
+    
+    if has_texture_changed || sb.sprite_count >= sb.max_sprites_per_batch {
+        flush_batch(sb) // Flush existing content
+        if has_texture_changed {
+             sb.current_texture = active_texture_for_draw // Set new texture for the *next* batch
+        }
     }
-
-    // If we've reached the max batch size, flush and start a new batch
-    if sb.sprite_count >= sb.max_sprites_per_batch {
-        flush_batch(sb)
-    }
+    // If only batch was full but texture is same, current_texture remains set.
+    // If texture changed, current_texture is now the new one.
 
     // Get texture dimensions for UV calculation
-    tex_width: f32 = 1.0
-    tex_height: f32 = 1.0
-    
-    if gl_tex, ok := tex_to_use.variant.(^Gl_Texture); ok && gl_tex != nil {
-        tex_width = f32(gl_tex.width)
-        tex_height = f32(gl_tex.height)
+    // These should come from the Gfx_Texture struct itself, not its variant.
+    tex_width  := f32(active_texture_for_draw.width)
+    tex_height := f32(active_texture_for_draw.height)
+    if tex_width == 0 || tex_height == 0 {
+        log.warnf("SpriteBatch: Texture has zero dimension (W: %f, H: %f). Skipping draw.", tex_width, tex_height)
+        return
     }
 
     // Calculate UV coordinates

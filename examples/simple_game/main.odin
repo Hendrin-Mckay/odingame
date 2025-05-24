@@ -11,11 +11,13 @@ import ocore "../../odingame/core"
 import ogfx "../../odingame/graphics"
 import oinput "../../odingame/input"
 import omath "../../odingame/math"
-import ocommon "../../odingame/common" // Added for common.Engine_Error
-import "core:math/linalg" // For orthographic_rh_zo
+import ocommon "../../odingame/common" 
+import "core:math/linalg" 
+import "core:os" // For command line arguments
+import ocontent "../../odingame/content" // Import Content_Manager package
 
 // Global game variables
-player_texture: ogfx.Gfx_Texture // Changed from ^ogfx.Texture2D
+player_texture: ^ogfx.Texture2D // Changed to pointer to new Texture2D struct
 player_pos: omath.Vector2f
 player_speed: f32 = 200.0 // pixels per second
 
@@ -29,31 +31,45 @@ game_initialize :: proc(game: ^ocore.Game) {
 game_load_content :: proc(game: ^ocore.Game) {
     fmt.println("Game Load Content")
     // Use the new texture loading function which requires Gfx_Device
-    // load_texture_from_file_gfx was defined in odingame/graphics/texture.odin
-    tex, err := ogfx.load_texture_from_file_gfx(game.window.gfx_device, "examples/simple_game/sprite.png")
-    if err != .None { // Now comparing with common.Engine_Error.None (implicitly, as .None is universal)
-        fmt.eprintln("Failed to load texture 'examples/simple_game/sprite.png':", ocommon.engine_error_to_string(err))
-        // Attempt to load the placeholder text file name (this will also likely fail with the new loader)
-        _, err_txt := ogfx.load_texture_from_file_gfx(game.window.gfx_device, "examples/simple_game/sprite.png.txt")
-        if err_txt != .None {
-             fmt.eprintln("Also failed to load 'examples/simple_game/sprite.png.txt':", ocommon.engine_error_to_string(err_txt))
-        } else {
-            // This case should ideally not be hit. If it were, destroy the unwanted texture.
-            // Assuming _ is the handle, which is not stored here.
-            // This part of the logic might need rethinking if .txt could be valid.
-            fmt.println("Note: Placeholder 'sprite.png.txt' was loaded but is not a usable texture (this is unexpected).")
-        }
-        // player_texture remains an uninitialized Gfx_Texture, draw function should handle this
+    // The asset path should be relative to the executable or an assets directory.
+    // Assuming "assets/sprite.png" is the correct path relative to where the example is run from.
+    // The README.md for OdinGame main project shows "assets/sprite.png" for its example.
+    asset_path := "assets/sprite.png" 
+    // If running from `odingame/examples/simple_game`, path might be "../../assets/sprite.png" if assets is at root.
+    // For now, let's assume 'assets/sprite.png' will be found if CWD is odingame root.
+    // For a more robust solution, the example could try multiple relative paths or require assets to be copied.
+    // The original example used "examples/simple_game/sprite.png"
+    
+    // Corrected path assuming CWD is odingame root, or assets are copied to example dir.
+    // For this test, let's use a path that is usually valid when running from example dir.
+    // The original example likely assumed CWD was the example dir.
+    // For now, to match the prior structure of the example:
+    texture_file_path := "sprite.png" // Assumes sprite.png is next to the executable or found via search paths.
+                                      // Or, more robustly: "examples/simple_game/sprite.png" if CWD is repo root.
+                                      // Let's use "examples/simple_game/sprite.png" for consistency with prior code.
+    // Content_Manager's root is "assets" by default in core.Game.
+    // So, "sprite.png" will look for "assets/sprite.png".
+    // If the example's assets are in "examples/simple_game/assets/", then Content_Manager root should be set accordingly,
+    // or the asset path here should be "examples/simple_game/sprite.png".
+    // For now, let's assume the asset is located at "assets/sprite.png" relative to executable,
+    // and ContentManager root is "assets".
+    asset_to_load := "sprite.png" // This will be searched as "assets/sprite.png"
+
+    tex, err := ocontent.content_load_texture2D(game.content, asset_to_load)
+    if err != .None { 
+        fmt.eprintln("Failed to load texture '", asset_to_load, "': ", ocommon.engine_error_to_string(err))
+        // player_texture remains nil
     } else {
-        player_texture = tex
-        fmt.println("Loaded texture 'examples/simple_game/sprite.png' successfully!")
+        player_texture = tex // tex is ^ogfx.Texture2D
+        fmt.println("Loaded texture '", asset_to_load, "' successfully!")
     }
     
     player_w: f32 = 0
     player_h: f32 = 0
-    if ogfx.is_gfx_texture_valid(player_texture) { // Use new validity check
-        player_w = f32(ogfx.gfx_api.get_texture_width(player_texture))
-        player_h = f32(ogfx.gfx_api.get_texture_height(player_texture))
+    // Use the new Texture2D struct fields and check if pointer is nil
+    if player_texture != nil && !ogfx.is_texture_disposed(player_texture) {
+        player_w = f32(player_texture.width)
+        player_h = f32(player_texture.height)
     }
 
     player_pos = omath.Vector2f{
@@ -66,27 +82,35 @@ game_update :: proc(game: ^ocore.Game, game_time: ocore.GameTime) {
     delta_time := f32(game_time.elapsed_game_time)
     move_amount := player_speed * delta_time
 
-    // Input uses sdl2.Scancode directly via the oinput.Key alias
-    if oinput.is_key_down(.LEFT) { // e.g. oinput.Key.LEFT which is sdl2.Scancode.LEFT
+    // Input uses the new XNA-style input API
+    kb_state := oinput.keyboard_get_state()
+
+    if oinput.keyboard_state_is_key_down(kb_state, .Left) {
         player_pos.x -= move_amount
     }
-    if oinput.is_key_down(.RIGHT) {
+    if oinput.keyboard_state_is_key_down(kb_state, .Right) {
         player_pos.x += move_amount
     }
-    if oinput.is_key_down(.UP) {
+    if oinput.keyboard_state_is_key_down(kb_state, .Up) {
         player_pos.y -= move_amount
     }
-    if oinput.is_key_down(.DOWN) {
+    if oinput.keyboard_state_is_key_down(kb_state, .Down) {
         player_pos.y += move_amount
     }
+    
+    // Example of using "is_key_pressed" for a one-shot action
+    // if oinput.keyboard_is_key_pressed(.Space) {
+    //    fmt.println("Space pressed this frame!")
+    // }
+
 
     // Boundaries (simple wrap around for now)
     // Ensure player_pos does not go too far off screen before wrapping
     player_w := f32(0)
     player_h := f32(0)
-    if ogfx.is_gfx_texture_valid(player_texture) {
-        player_w = f32(ogfx.gfx_api.get_texture_width(player_texture))
-        player_h = f32(ogfx.gfx_api.get_texture_height(player_texture))
+    if player_texture != nil && !ogfx.is_texture_disposed(player_texture) {
+        player_w = f32(player_texture.width)
+        player_h = f32(player_texture.height)
     }
 
     window_w := f32(ocore.get_window_width(game.window))
@@ -97,8 +121,8 @@ game_update :: proc(game: ^ocore.Game, game_time: ocore.GameTime) {
     if player_pos.y + player_h < 0 { player_pos.y = window_h }
     if player_pos.y > window_h { player_pos.y = -player_h }
 
-
-    if oinput.is_key_pressed(.ESCAPE) {
+    // Use the new "is_key_pressed" which checks current vs previous state
+    if oinput.keyboard_is_key_pressed(.Escape) { // Note: .Escape not .ESCAPE for Keys enum
         ocore.exit(game)
     }
 }
@@ -113,7 +137,7 @@ game_draw :: proc(game: ^ocore.Game, game_time: ocore.GameTime) {
         clear_depth = true, // Assuming depth buffer is used or available
         depth = 1.0,
     }
-    ogfx.gfx_api.clear_screen(game.window.gfx_device, clear_options)
+    ogfx.clear_screen(game.window.gfx_device, game.window.gfx_window, {.Cornflower_Blue}) // Use named color
 
     // Begin SpriteBatch with an orthographic projection
     proj_matrix := linalg.orthographic_rh_zo(
@@ -124,29 +148,65 @@ game_draw :: proc(game: ^ocore.Game, game_time: ocore.GameTime) {
         -1, 
         1,
     )
-    ogfx.begin_batch(game.sprite_batch, proj_matrix)
+    // For XNA-like SpriteBatch, Begin takes parameters. Using defaults for now.
+    // The matrix is passed to Begin.
+    ogfx.sprite_batch_begin(game.sprite_batch, transform_matrix = proj_matrix)
 
-    if ogfx.is_gfx_texture_valid(player_texture) {
+    if player_texture != nil && !ogfx.is_texture_disposed(player_texture) {
         // Draw player sprite using the new SpriteBatch draw_texture method
-        // `ocore.WHITE` should be a `ocore.Color` struct {r,g,b,a: u8}
-        ogfx.draw_texture(game.sprite_batch, player_texture, player_pos, ocore.WHITE)
+        // This now needs to take ^ogfx.Texture2D
+        ogfx.sprite_batch_draw_texture(game.sprite_batch, player_texture, player_pos, ocore.WHITE)
     } else {
         // Player texture not loaded or invalid
     }
     
-    ogfx.end_batch(game.sprite_batch)
+    ogfx.sprite_batch_end(game.sprite_batch)
 
     // Present the window using gfx_api
-    ogfx.gfx_api.present_window(game.window.gfx_window)
+    ogfx.present_window(game.window.gfx_window) // Use the direct present_window from graphics package
 }
 
 // --- Main ---
 main :: proc() {
+    preferred_backend := ocore.Graphics_Backend_Type.OpenGL // Default
+    
+    // Basic command line argument parsing for --backend
+    for arg, i in os.args {
+        if arg == "--backend" {
+            if i + 1 < len(os.args) {
+                backend_str := strings.to_lower(os.args[i+1])
+                if backend_str == "dx11" || backend_str == "directx11" {
+                    preferred_backend = .DirectX11
+                } else if backend_str == "metal" { // Added Metal option
+                    preferred_backend = .Metal
+                } else if backend_str == "opengl" {
+                    preferred_backend = .OpenGL
+                } else {
+                    fmt.eprintf("Warning: Unknown backend '%s' specified. Defaulting to OpenGL.\n", os.args[i+1])
+                }
+            } else {
+                fmt.eprintln("Warning: --backend flag requires an argument (e.g., opengl, dx11). Defaulting to OpenGL.")
+            }
+            break // Stop after processing --backend
+        }
+    }
+    fmt.printf("Attempting to initialize with backend: %v\n", preferred_backend)
+
+    ocore.run_with_options(ocore.Game_Run_Options{
+        title = "Simple Odingame Example",
+        width = 800,
+        height = 600,
+        initialize_fn = game_initialize,
+        load_content_fn = game_load_content,
+        update_fn = game_update,
+        draw_fn = game_draw,
+        preferred_backend = preferred_backend,
+    })
     // The core.run function will handle all SDL initialization and shutdown.
-    ocore.run(
-        "Simple Odingame Example", // Window Title
-        800,                       // Window Width
-        600,                       // Window Height
+    // ocore.run(
+    //     "Simple Odingame Example", // Window Title
+    //     800,                       // Window Width
+    //     600,                       // Window Height
         game_initialize,
         game_load_content,
         game_update,

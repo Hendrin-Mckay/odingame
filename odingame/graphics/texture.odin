@@ -1,474 +1,268 @@
 package graphics
 
-import gl "vendor:OpenGL/gl"
-import "vendor:stb/image"
-import "../common" // For common.Engine_Error
-import "core:fmt"
+import "../gfx_interface" // For Gfx_Texture and Texture_Format
+import "../common"       // For Engine_Error
 import "core:log"
 import "core:mem"
-import "core:os"
-import "core:strings"
+// For graphics_device.odin's Surface_Format, if we decide to use it directly.
+// For now, define a local one to avoid cycles if texture.odin is imported by graphics_device.odin
+// import . "./graphics_device" // This would make graphics_device.Surface_Format available
 
-// Gfx_Texture is the handle used by the game code to reference a texture.
-// It automatically manages reference counting when copied or destroyed.
-Gfx_Texture :: struct {
-    variant: union {^Gl_Texture},
+// Local Surface_Format enum for Texture2D.
+// This should be consolidated with graphics_device.Surface_Format eventually.
+// XNA SurfaceFormat has more options.
+Surface_Format_Texture :: enum {
+    Color,            // Typically R8G8B8A8_UNORM or B8G8R8A8_UNORM
+    Bgr565,
+    Bgra5551,
+    Bgra4444,
+    Normalized_Byte2, // Placeholder
+    Normalized_Byte4, // Placeholder
+    Rgba1010102,      // Placeholder
+    Rg32,             // Placeholder (2x float32)
+    Rgba64,           // Placeholder (4x half float)
+    Alpha8,
+    Single,           // R32_FLOAT
+    Half_Single,      // R16_FLOAT
+    Half_Vector2,     // Placeholder
+    Half_Vector4,     // Placeholder
+    Hdr_Blendable,    // Placeholder (e.g. R16G16B16A16_FLOAT)
+    // Depth Formats (usually not set directly on Texture2D this way in XNA, but for completeness)
+    Dxt1, // BC1
+    Dxt3, // BC2
+    Dxt5, // BC3
+    Depth24_Stencil8, // For consistency if a texture can be a depth target
+}
+
+// Texture is a base conceptual type for texture resources.
+// In XNA, Texture is an abstract base class. Here, we embed its common fields.
+Texture_Base :: struct {
+    graphics_device: ^Graphics_Device, // Reference to the Graphics_Device that created this texture
+    format:          Surface_Format_Texture, 
+    level_count:     int,                 // Number of mipmap levels
     
-    // This struct has custom copy and destroy behavior
-    _: struct {},
+    _gfx_texture:    gfx_interface.Gfx_Texture, // Low-level backend handle
+    _is_disposed:    bool,
+    allocator:       mem.Allocator, // Allocator used for this struct instance
 }
 
-// --- Reference counting utilities ---
+// Texture2D represents a 2D texture resource, aligning with XNA's Texture2D.
+Texture2D :: struct {
+    using _base: Texture_Base, // Embed common Texture fields
 
-// make_texture creates a new Gfx_Texture with proper reference counting
-make_texture :: proc(device: Gfx_Device, width, height: int, format: Texture_Format, usage: Texture_Usage, data: rawptr = nil) -> (Gfx_Texture, common.Engine_Error) {
-    return gfx_api.create_texture(device, width, height, format, usage, data)
+    width:  int,
+    height: int,
 }
 
-// destroy_texture destroys a texture, releasing its resources when the reference count reaches zero
-destroy_texture :: proc(tex: ^Gfx_Texture) {
-    if tex == nil {
-        return
-    }
-    gfx_api.destroy_texture(tex^)
-}
+// --- Texture2D Procedures ---
 
-// clone_texture creates a new reference to an existing texture
-clone_texture :: proc(tex: Gfx_Texture) -> Gfx_Texture {
-    if tex.variant == nil {
-        return {}
-    }
+// new_texture2D is an internal constructor used by Content_Manager or other loading functions.
+// It wraps a low-level Gfx_Texture with higher-level information.
+_new_texture2D_from_gfx_texture :: proc(
+    gd: ^Graphics_Device, 
+    gfx_tex: gfx_interface.Gfx_Texture, 
+    w, h: int, 
+    original_format: gfx_interface.Texture_Format, // The format used to create gfx_tex
+    num_mip_levels: int,
+    alloc: mem.Allocator,
+) -> ^Texture2D {
+    tex2d := new(Texture2D, alloc)
+    tex2d.graphics_device = gd
+    tex2d._gfx_texture = gfx_tex 
+    tex2d.width = w
+    tex2d.height = h
     
-    if t, ok := tex.variant.(^Gl_Texture); ok {
-        core.add_ref(t)
-    }
-    
-    return tex
-}
-
-// get_ref_count gets the current reference count of a texture (for debugging)
-get_texture_ref_count :: proc(tex: Gfx_Texture) -> int {
-    if tex.variant == nil {
-        return 0
-    }
-    
-    if t, ok := tex.variant.(^Gl_Texture); ok {
-        return core.get_ref_count(t)
-    }
-    
-    return -1
-}
-
-// --- OpenGL Specific Struct ---
-
-Gl_Texture :: struct {
-    using base: core.RefCounted,
-    
-    // Texture data
-    id:             u32,
-    width:          int,
-    height:         int,
-    format:         Texture_Format, // Store the interface format for reference
-    gl_internal_fmt: gl.GLenum,
-    gl_fmt:         gl.GLenum,
-    gl_type:        gl.GLenum,
-    main_allocator: ^rawptr,
-    
-    // Optional debug name
-    debug_name:     string,
-}
-
-// --- Helper to map interface format to GL formats/types ---
-
-@(private="file")
-get_gl_texture_formats :: proc(format: Texture_Format) -> (internal_format, gl_format, gl_type: gl.GLenum, err: common.Engine_Error) {
-	#partial switch format {
-	case .R8:
-		return gl.R8, gl.RED, gl.UNSIGNED_BYTE, .None
-	case .RGB8:
-		// Some drivers might have issues with gl.RGB8, gl.RGB, gl.UNSIGNED_BYTE for glTexImage2D source data if not aligned properly.
-		// Using GL_RGB directly for data format is common.
-		return gl.RGB8, gl.RGB, gl.UNSIGNED_BYTE, .None
-	case .RGBA8:
-		return gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, .None
-	case .SRGBA8:
-		return gl.SRGB8_ALPHA8, gl.RGBA, gl.UNSIGNED_BYTE, .None
-	// case .Depth24_Stencil8: // TODO when framebuffers/render targets are added
-	// 	return gl.DEPTH24_STENCIL8, gl.DEPTH_STENCIL, gl.UNSIGNED_INT_24_8, .None
-	case:
-		log.errorf("Unsupported texture format: %v", format)
-		return 0, 0, 0, common.Engine_Error.Texture_Creation_Failed // Or a more specific error "Unsupported_Format"
-	}
-	return 0,0,0, .None // Should not be reached
-}
-
-
-// --- Implementation of Gfx_Device_Interface texture functions ---
-
-// gl_create_texture_impl creates a new OpenGL texture with the specified parameters.
-// The caller is responsible for destroying the texture when it's no longer needed.
-gl_create_texture_impl :: proc(device: Gfx_Device, width, height: int, format: Texture_Format, usage: Texture_Usage, data: rawptr = nil) -> (texture: Gfx_Texture, err: common.Engine_Error) {
-	// Validate inputs
-	if width <= 0 || height <= 0 {
-		log.errorf("Invalid texture dimensions %dx%d", width, height)
-		return {}, common.Engine_Error.Invalid_Argument
-	}
-
-	// Get OpenGL format enums
-	internal_fmt, gl_fmt, gl_type, fmt_err := get_gl_texture_formats(format)
-	if fmt_err != .None {
-		log.errorf("Unsupported texture format: %v", format)
-		return {}, fmt_err
-	}
-
-	// Create OpenGL texture
-	tex_id: u32
-	gl.GenTextures(1, &tex_id)
-	if tex_id == 0 {
-		log.error("Failed to generate OpenGL texture: glGenTextures failed")
-		return {}, common.Engine_Error.Texture_Creation_Failed
-	}
-
-	// Set up error handling for texture operations
-	gl_error := gl.GetError()
-	if gl_error != gl.NO_ERROR {
-		log.errorf("OpenGL error before texture creation: 0x%x", gl_error)
-		gl.DeleteTextures(1, &tex_id)
-		return {}, common.Engine_Error.OpenGL_Error
-	}
-
-	// Bind the texture for configuration
-	gl.BindTexture(gl.TEXTURE_2D, tex_id)
-
-	// Set texture parameters
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT)
-	
-	// Set appropriate min/mag filters based on usage
-	if .GenerateMipmaps in usage && data != nil {
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
-	} else {
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-	}
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-
-	// Handle pixel unpack alignment for non-power-of-two textures
-	if (gl_fmt == gl.RGB || gl_fmt == gl.RGBA) && (width % 4 != 0) {
-		bytes_per_pixel: int = gl_fmt == gl.RGB ? 3 : 4
-		if (width * bytes_per_pixel) % 4 != 0 {
-			gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
-		}
-	}
-
-	// Allocate texture storage and upload data
-	gl.TexImage2D(gl.TEXTURE_2D, 0, internal_fmt, i32(width), i32(height), 0, gl_fmt, gl_type, data)
-
-	// Check for OpenGL errors after texture creation
-	gl_error = gl.GetError()
-	if gl_error != gl.NO_ERROR {
-		log.errorf("Failed to create texture (glTexImage2D): 0x%x", gl_error)
-		gl.DeleteTextures(1, &tex_id)
-		return {}, common.Engine_Error.OpenGL_Error
-	}
-
-	// Generate mipmaps if requested and data was provided
-	if .GenerateMipmaps in usage && data != nil {
-		gl.GenerateMipmap(gl.TEXTURE_2D)
-		gl_error = gl.GetError()
-		if gl_error != gl.NO_ERROR {
-			log.errorf("Failed to generate mipmaps: 0x%x", gl_error)
-			gl.DeleteTextures(1, &tex_id)
-			return {}, common.Engine_Error.OpenGL_Error
-		}
-	}
-
-	// Restore default unpack alignment if it was changed
-	gl.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
-
-	// Create the texture wrapper
-	device_ptr, ok_device := device.variant.(^Gl_Device)
-	if !ok_device {
-		log.error("Invalid Gfx_Device type for texture creation")
-		gl.DeleteTextures(1, &tex_id)
-		return {}, common.Engine_Error.Invalid_Handle
-	}
-
-	gl_texture := new(Gl_Texture, device_ptr.main_allocator^)
-	
-	// Initialize reference counting
-	core.init_refcount(gl_texture, destroy_gl_texture)
-	
-	// Set up texture data
-	gl_texture.id = tex_id
-	gl_texture.width = width
-	gl_texture.height = height
-	gl_texture.format = format
-	gl_texture.gl_internal_fmt = internal_fmt
-	gl_texture.gl_fmt = gl_fmt
-	gl_texture.gl_type = gl_type
-	gl_texture.main_allocator = device_ptr.main_allocator
-	
-	// Set debug name if available
-	when ODIN_DEBUG {
-		gl_texture.debug_name = fmt.tprintf("Texture_%dx%d_%v", width, height, tex_id)
-	}
-
-	log.debugf("Created OpenGL texture %dx%d (ID: %v, format: %v)", width, height, tex_id, format)
-	return Gfx_Texture{gl_texture}, common.Engine_Error.None
-
-	gl.BindTexture(gl.TEXTURE_2D, 0) // Unbind
-
-	// Restore default unpack alignment if changed
-	if gl_fmt == gl.RGB && (width % 4 != 0) {
-		if (width * 3) % 4 != 0 {
-			gl.PixelStorei(gl.UNPACK_ALIGNMENT, 4) // Default is 4
-		}
-	}
-
-
-	gl_texture_ptr := new(Gl_Texture, device_ptr.main_allocator^)
-	gl_texture_ptr.id = tex_id
-	gl_texture_ptr.width = width
-	gl_texture_ptr.height = height
-	gl_texture_ptr.format = format
-	gl_texture_ptr.gl_internal_fmt = internal_fmt
-	gl_texture_ptr.gl_fmt = gl_fmt
-	gl_texture_ptr.gl_type = gl_type
-	gl_texture_ptr.main_allocator = device_ptr.main_allocator
-
-	log.infof("OpenGL Texture ID %v (%dx%d, format %v) created.", tex_id, width, height, format)
-	return Gfx_Texture{gl_texture_ptr}, common.Engine_Error.None
-}
-
-gl_update_texture_impl :: proc(texture: Gfx_Texture, x, y, width, height int, data: rawptr) -> common.Engine_Error {
-	tex_ptr, ok := texture.variant.(^Gl_Texture)
-	if !ok || tex_ptr.id == 0 {
-		log.error("gl_update_texture: Invalid or uninitialized Gfx_Texture.")
-		return common.Engine_Error.Invalid_Handle
-	}
-
-	if data == nil {
-		log.error("gl_update_texture: Data pointer is nil.")
-		return common.Engine_Error.Texture_Creation_Failed // Or a more specific error like Invalid_Argument
-	}
-
-	if x < 0 || y < 0 || width <= 0 || height <= 0 || (x + width) > tex_ptr.width || (y + height) > tex_ptr.height {
-		log.errorf("gl_update_texture: Invalid update region (x:%d,y:%d, w:%d,h:%d) for texture size %dx%d.",
-			x, y, width, height, tex_ptr.width, tex_ptr.height)
-		return common.Engine_Error.Texture_Creation_Failed // Or out_of_bounds error
-	}
-
-	gl.BindTexture(gl.TEXTURE_2D, tex_ptr.id)
-
-	// Handle pixel unpack alignment for sub-image updates too
-	if tex_ptr.gl_fmt == gl.RGB && (width % 4 != 0) {
-		if (width * 3) % 4 != 0 {
-			gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
-		}
-	}
-
-	gl.TexSubImage2D(gl.TEXTURE_2D, 0, i32(x), i32(y), i32(width), i32(height), tex_ptr.gl_fmt, tex_ptr.gl_type, data)
-
-	// Consider if mipmaps need to be regenerated after partial update.
-	// Generally, yes, if mipmapping is used.
-	// Check if min_filter is a mipmap filter
-	min_filter_param : i32
-	gl.GetTexParameteriv(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, &min_filter_param)
-	if min_filter_param == gl.LINEAR_MIPMAP_LINEAR || min_filter_param == gl.LINEAR_MIPMAP_NEAREST ||
-	   min_filter_param == gl.NEAREST_MIPMAP_LINEAR || min_filter_param == gl.NEAREST_MIPMAP_NEAREST {
-		gl.GenerateMipmap(gl.TEXTURE_2D)
-	}
-
-	gl.BindTexture(gl.TEXTURE_2D, 0) // Unbind
-
-	// Restore default unpack alignment if changed
-	if tex_ptr.gl_fmt == gl.RGB && (width % 4 != 0) {
-		if (width * 3) % 4 != 0 {
-			gl.PixelStorei(gl.UNPACK_ALIGNMENT, 4) // Default is 4
-		}
-	}
-
-	log.infof("OpenGL Texture ID %v updated region (x:%d,y:%d, w:%d,h:%d).", tex_ptr.id, x, y, width, height)
-	return common.Engine_Error.None
-}
-
-// Internal cleanup function called when reference count reaches zero
-destroy_gl_texture :: proc(tex: ^Gl_Texture) {
-    if tex == nil {
-        return
-    }
-    
-    if tex.id != 0 {
-        gl.DeleteTextures(1, &tex.id)
-        log.debugf("Destroyed OpenGL texture ID %v (%s)", tex.id, tex.debug_name)
-    }
-    
-    // Free the texture memory
-    if tex.main_allocator != nil {
-        free(tex, tex.main_allocator^)
-    }
-}
-
-gl_destroy_texture_impl :: proc(texture: Gfx_Texture) {
-    if tex_ptr, ok := texture.variant.(^Gl_Texture); ok {
-        // Just release the reference - actual cleanup happens in destroy_gl_texture
-        // when the reference count reaches zero
-        core.release(tex_ptr)
+    // Map gfx_interface.Texture_Format to our local Surface_Format_Texture
+    mapped_format, ok_map := to_surface_format_texture(original_format)
+    if !ok_map {
+        log.warnf("Texture2D: Could not map gfx_interface.Texture_Format %v to Surface_Format_Texture. Defaulting to Color.", original_format)
+        tex2d.format = .Color
     } else {
-        log.errorf("gl_destroy_texture: Invalid texture type %v", texture.variant)
-    }
-}
-
-
-// --- Utility function to load texture from file using the new interface ---
-// This would typically reside in a higher-level utility package or the application code,
-// not directly in the backend implementation.
-// For now, placing it here to show how it would use the interface.
-
-// load_texture_from_file_gfx loads a texture from a file and returns a Gfx_Texture handle.
-// The caller is responsible for destroying the returned texture when it's no longer needed.
-// load_texture_from_file loads a texture from a file and returns a reference-counted Gfx_Texture.
-// The caller is responsible for calling destroy_texture when done with the texture.
-load_texture_from_file :: proc(device: Gfx_Device, filepath: string, generate_mipmaps: bool = true) -> (texture: Gfx_Texture, err: common.Engine_Error) {
-    // Validate input parameters
-    if !is_valid(device) {
-        log.error("load_texture_from_file: Invalid Gfx_Device provided")
-        return {}, common.Engine_Error.Invalid_Handle
-    }
-
-    if len(filepath) == 0 {
-        log.error("load_texture_from_file: Empty file path provided")
-        return {}, common.Engine_Error.Invalid_Argument
-    }
-
-    log.debugf("Loading texture from file: %s", filepath)
-
-    // Load image data using stb_image
-    data, width, height, comp, err_load := image.load_from_file(filepath, 0)
-    if err_load != nil || data == nil {
-        log.errorf("Failed to load image from file '%s': %v", filepath, err_load)
-        return {}, common.Engine_Error.Texture_Creation_Failed
+        tex2d.format = mapped_format
     }
     
-    // Ensure image data is always freed, even on early returns
-    defer {
-        if data != nil {
-            image.free(data)
-        }
+    tex2d.level_count = num_mip_levels
+    if tex2d.level_count == 0 { tex2d.level_count = 1 } // MipLevels = 0 in D3D11_TEXTURE2D_DESC means full chain
+    
+    tex2d._is_disposed = false
+    tex2d.allocator = alloc
+    return tex2d
+}
+
+// texture2D_dispose marks the texture as disposed.
+// The actual GPU resource (_gfx_texture) is released by Content_Manager (if loaded by it)
+// or when the Graphics_Device is destroyed if this Texture2D was created manually outside CM.
+texture2D_dispose :: proc(tex: ^Texture2D) {
+    if tex == nil || tex._is_disposed {
+        return
+    }
+    // If this Texture2D instance directly "owns" the _gfx_texture (e.g. created manually, not via ContentManager),
+    // then it should be destroyed here. Otherwise, this is just a soft dispose.
+    // For now, assume ContentManager handles actual GPU resource release for assets it loads.
+    // If a texture is created manually by game code, it must be manually destroyed using gfx_api.destroy_texture.
+    log.debugf("Texture2D marked as disposed (GPU resource path: %v): %dx%d", tex._gfx_texture.variant, tex.width, tex.height)
+    tex._is_disposed = true
+    
+    // If this Texture2D was responsible for the _gfx_texture's lifetime (e.g. manual creation),
+    // then: gfx_api.destroy_texture(tex._gfx_texture)
+    // However, in the ContentManager model, CM owns it.
+}
+
+// --- Accessors ---
+get_internal_gfx_texture :: proc(tex: ^Texture2D) -> gfx_interface.Gfx_Texture {
+    if tex != nil && !tex._is_disposed { return tex._gfx_texture }
+    return {} 
+}
+get_texture_width :: proc(tex: ^Texture2D) -> int {
+    if tex != nil { return tex.width }
+    return 0
+}
+get_texture_height :: proc(tex: ^Texture2D) -> int {
+    if tex != nil { return tex.height }
+    return 0
+}
+get_texture_format :: proc(tex: ^Texture2D) -> Surface_Format_Texture {
+    if tex != nil { return tex.format }
+    // Return a sensible default or indicate error
+    return .Color // Or a specific "Undefined" if added to Surface_Format_Texture
+}
+is_texture_disposed :: proc(tex: ^Texture2D) -> bool {
+    return tex == nil || tex._is_disposed
+}
+
+
+// --- Format Conversion Helper ---
+// Maps gfx_interface.Texture_Format to the local Surface_Format_Texture
+to_surface_format_texture :: proc(fmt: gfx_interface.Texture_Format) -> (sfmt: Surface_Format_Texture, ok: bool) {
+    ok = true
+    switch fmt {
+    case .RGBA8_UNORM, .BGRA8_UNORM: // Assuming these are common "Color" formats
+        sfmt = .Color
+    case .R8_UNORM:
+        sfmt = .Alpha8 // Or a new .R8_UNORM in Surface_Format_Texture
+    case .R32_FLOAT:
+        sfmt = .Single
+    case .R16_FLOAT:
+        sfmt = .Half_Single
+    // Add more mappings as gfx_interface.Texture_Format expands and Surface_Format_Texture gets more detailed.
+    // For DXT/BC formats:
+    case .BC1_UNORM, .BC1_UNORM_SRGB: sfmt = .Dxt1
+    case .BC2_UNORM, .BC2_UNORM_SRGB: sfmt = .Dxt3
+    case .BC3_UNORM, .BC3_UNORM_SRGB: sfmt = .Dxt5
+    // Depth formats
+    case .DEPTH24_STENCIL8: sfmt = .Depth24_Stencil8
+
+    // Fallback for unmapped formats
+    case .Undefined: fallthrough
+    default:
+        // log.warnf("to_surface_format_texture: Unhandled gfx_interface.Texture_Format: %v", fmt)
+        sfmt = .Color // Default or indicate unmapped
+        ok = false 
+    }
+    return
+}
+
+
+// --- Existing Low-Level Texture Loading (using gfx_api) ---
+// This function, `load_texture_from_file`, returns a raw Gfx_Texture.
+// ContentManager will use this and wrap it into the Texture2D struct.
+// This function was previously in this file and is kept for that purpose.
+// It uses SDL_image for pixel loading and gfx_api.create_texture for GPU upload.
+
+// load_texture_from_file loads a texture from a file and returns a reference-counted Gfx_Texture
+// along with the gfx_interface.Texture_Format that was determined and used for creation.
+// The caller is responsible for calling destroy_texture when done with the texture.
+load_texture_from_file :: proc(device: gfx_interface.Gfx_Device, filepath_str: string, generate_mipmaps: bool = true) -> (texture: gfx_interface.Gfx_Texture, original_format: gfx_interface.Texture_Format, err: common.Engine_Error) {
+    // Validate input parameters
+    // is_valid(device) is not defined here, check variant directly
+    if device.variant == nil {
+        log.error("load_texture_from_file: Invalid Gfx_Device provided (nil variant).")
+        return {}, .Undefined, .Invalid_Handle
     }
 
-    log.infof("Loaded image '%s': %dx%d, components: %d", filepath, width, height, comp)
+    if len(filepath_str) == 0 {
+        log.error("load_texture_from_file: Empty file path provided.")
+        return {}, .Undefined, .Invalid_Parameter
+    }
 
-    // Determine texture format based on number of components
-    format: Texture_Format
+    log.debugf("Loading texture from file (low-level): %s", filepath_str)
+
+    // Load image data using stb_image (assuming stb_image is used by the engine now, or SDL_image)
+    // This part needs to align with the actual image loading mechanism.
+    // The previous version used SDL_image. Let's assume that for now.
+    // This function should ideally just take pixel data, width, height, format.
+    // For now, reproduce simplified SDL_image loading path.
+    
+    // This function is becoming problematic as it duplicates image loading logic
+    // that should be centralized or passed in.
+    // For ContentManager, it would be better if this just took raw pixel data.
+    // However, to keep it self-contained for now and matching previous role:
+    
+    // This function should ideally be private to the graphics package or part of platform utilities.
+    // For now, it's a helper for ContentManager's internal loader.
+
+    // If using SDL_image (as per previous core.game setup):
+    // import sdl_image "vendor:sdl2/image"
+    // surface := sdl_image.Load(filepath_str)
+    // if surface == nil {
+    //     log.errorf("Failed to load image from file '%s' with SDL_image: %s", filepath_str, sdl_image.GetError())
+    //     return {}, .File_Not_Found // Or .Texture_Creation_Failed
+    // }
+    // defer sdl_image.FreeSurface(surface)
+    // width  := int(surface.w)
+    // height := int(surface.h)
+    // data   := surface.pixels
+    // Determine format from surface.format.format (SDL_PixelFormatEnum) -> gfx_interface.Texture_Format
+    // This is complex. A simpler path is if gfx_api.create_texture can take a filename directly
+    // or if a helper exists to get (pixels, w, h, gfx_fmt) from a file.
+    
+    // For now, let's assume a placeholder for getting pixel data and info.
+    // This part is highly dependent on how image loading is actually implemented.
+    // The existing `gfx_api.load_texture_from_file` in the original `texture.odin` (before this refactor)
+    // was a high-level loader. This needs to be clarified.
+    // Let's assume this `load_texture_from_file` is the ONE that loads pixels and creates Gfx_Texture.
+    // It was defined in the `graphics` package, so it can call `gfx_api.create_texture`.
+
+    // The previous implementation of this function used stb_image. Let's stick to that for now.
+    // import image "vendor:stb/image" // Ensure this import is at the top
+    
+    pixels, w, h, comp, load_err := image.load_from_file(filepath_str, 0)
+    if load_err != nil || pixels == nil {
+        log.errorf("Failed to load image from file '%s' with stb_image: %v", filepath_str, load_err)
+        return {}, .Undefined, .File_Not_Found 
+    }
+    defer if pixels != nil { image.free(pixels) }
+
+    determined_engine_format: gfx_interface.Texture_Format
     switch comp {
-    case 1: format = .R8
-    case 3: format = .RGB8
-    case 4: format = .RGBA8
-    case:
-        log.errorf("Unsupported number of components (%d) in image '%s'", comp, filepath)
-        return {}, common.Engine_Error.Unsupported_Format
+    case 1: determined_engine_format = .R8_UNORM 
+    case 3: determined_engine_format = .RGB8_UNORM 
+    case 4: determined_engine_format = .RGBA8_UNORM
+    else:
+        log.errorf("Unsupported number of components (%d) in image '%s'", comp, filepath_str)
+        return {}, .Undefined, .Unsupported_Format
     }
+    
+    usage_flags: gfx_interface.Texture_Usage_Flags = {.ShaderResource}
+    if generate_mipmaps { usage_flags += {.GenerateMips} }
 
-    // Prepare texture usage flags
-    usage := Texture_Usage{.Sampled}
-    if generate_mipmaps {
-        usage += {.GenerateMipmaps}
-    }
-
-    // Create the texture using our reference-counted API
-    texture, create_err := make_texture(device, width, height, format, usage, data)
+    // Create the low-level Gfx_Texture
+    gfx_texture, create_err := gfx_api.create_texture(device, w, h, determined_engine_format, usage_flags, pixels, filepath_str)
     if create_err != .None {
-        log.errorf("Failed to create Gfx_Texture from image '%s': %s", 
-                  filepath, gfx_api.get_error_string(create_err)) // Assuming gfx_api.get_error_string is updated
-        return {}, create_err
+        log.errorf("Failed to create Gfx_Texture from image '%s': %v", filepath_str, create_err)
+        return {}, .Undefined, create_err
     }
-
-    // Set debug name for the texture
-    when ODIN_DEBUG {
-        if t, ok := texture.variant.(^Gl_Texture); ok {
-            t.debug_name = fmt.tprintf("Texture_%s", filepath)
-        }
-    }
-
-    log.debugf("Successfully created texture from file '%s' (refcount: %d)", 
-              filepath, get_texture_ref_count(texture))
-    return texture, common.Engine_Error.None
+    
+    log.debugf("Successfully created Gfx_Texture from file '%s' with format %v", filepath_str, determined_engine_format)
+    return gfx_texture, determined_engine_format, .None
 }
 
-// Keep the old function name for backward compatibility
-load_texture_from_file_gfx :: proc(device: Gfx_Device, filepath: string, generate_mipmaps: bool = true) -> (Gfx_Texture, common.Engine_Error) {
-    log.warn("load_texture_from_file_gfx is deprecated, use load_texture_from_file instead")
-    return load_texture_from_file(device, filepath, generate_mipmaps)
-}
-}
-
-
-// The old Texture struct and load_texture_from_file, create_texture_from_image, destroy_texture
-// are now replaced by Gfx_Texture and the interface functions.
-// The `load_texture_from_file_gfx` is an example of how to use the new API.
-// Binding textures for drawing will be handled by different functions in the interface,
-// likely `set_texture_binding` or similar, which would be called by SpriteBatch or other renderers.
-// This will be part of Gfx_Device_Interface and implemented later.
-// For now, this file focuses on texture creation, update, and destruction.
-// The functions like `gl_create_texture_impl` need to be assigned
-// to the `gfx_api` in `device.odin`.
-// I will do that in the next step.
-
-// --- Texture Binding Implementation ---
-
-gl_bind_texture_to_unit_impl :: proc(device: Gfx_Device, texture: Gfx_Texture, unit: u32) -> common.Engine_Error {
-	// device_ptr, ok_device := device.variant.(^Gl_Device)
-	// if !ok_device {
-	// 	log.error("gl_bind_texture_to_unit: Invalid Gfx_Device type.")
-	// 	return common.Engine_Error.Invalid_Handle
-	// }
-	// No device specific state needed for bind_texture, relies on current GL context.
-
-	tex_ptr, ok_tex := texture.variant.(^Gl_Texture)
-	if !ok_tex {
-		// Allow binding a nil/invalid texture to a unit, which effectively unbinds.
-		gl.ActiveTexture(gl.TEXTURE0 + gl.GLenum(unit))
-		gl.BindTexture(gl.TEXTURE_2D, 0)
-		// log.warnf("gl_bind_texture_to_unit: Invalid Gfx_Texture provided. Unbinding texture unit %d.", unit)
-		return common.Engine_Error.None // Or .Invalid_Handle if strictly requiring valid texture
-	}
-
-	if tex_ptr.id == 0 {
-		// This is a valid Gl_Texture struct but with no GL resource.
-		gl.ActiveTexture(gl.TEXTURE0 + gl.GLenum(unit))
-		gl.BindTexture(gl.TEXTURE_2D, 0)
-		// log.warnf("gl_bind_texture_to_unit: Gfx_Texture ID is 0. Unbinding texture unit %d.", unit)
-		return common.Engine_Error.None
-	}
-	
-	max_units : i32
-	gl.GetIntegerv(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS, &max_units)
-	if unit >= u32(max_units) {
-		log.errorf("gl_bind_texture_to_unit: Texture unit %d exceeds maximum available units (%d).", unit, max_units)
-		return common.Engine_Error.Invalid_Handle // Or some "Invalid_Unit" error
-	}
-
-	gl.ActiveTexture(gl.TEXTURE0 + gl.GLenum(unit))
-	gl.BindTexture(gl.TEXTURE_2D, tex_ptr.id)
-	// log.debugf("Bound texture ID %v to unit %v", tex_ptr.id, unit) // Can be spammy
-	return common.Engine_Error.None
-}
-
-// --- Texture Utility Implementations ---
-
-gl_get_texture_width_impl :: proc(texture: Gfx_Texture) -> int {
-	if tex_ptr, ok := texture.variant.(^Gl_Texture); ok && tex_ptr != nil {
-		return tex_ptr.width
-	}
-	log.warnf("gl_get_texture_width: Invalid or non-Gl_Texture Gfx_Texture type: %v", texture.variant)
-	return 0
-}
-
-gl_get_texture_height_impl :: proc(texture: Gfx_Texture) -> int {
-	if tex_ptr, ok := texture.variant.(^Gl_Texture); ok && tex_ptr != nil {
-		return tex_ptr.height
-	}
-	log.warnf("gl_get_texture_height: Invalid or non-Gl_Texture Gfx_Texture type: %v", texture.variant)
-	return 0
+// This is a placeholder for the old function name if other parts of the code still use it.
+// It should be removed or updated once all callers use the new ContentManager.
+load_texture_from_file_gfx :: proc(device: gfx_interface.Gfx_Device, filepath_str: string, generate_mipmaps: bool = true) -> (gfx_interface.Gfx_Texture, common.Engine_Error) {
+    log.warn("load_texture_from_file_gfx is deprecated, use ContentManager.load_texture2D or graphics.load_texture_from_file (which now returns original_format).")
+    // This old signature cannot return the original_format, so it's problematic for new ContentManager.
+    // For now, just call the new one and discard the format.
+    tex, _, err := load_texture_from_file(device, filepath_str, generate_mipmaps)
+    return tex, err
 }

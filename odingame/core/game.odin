@@ -1,302 +1,524 @@
 package core
 
+import "core:fmt"
+import "core:log"
+import "core:time"
+import "core:slice" // For dynamic array operations on components (future)
 import "vendor:sdl2"
-import "vendor:sdl2/image" // Already there, but confirm
-import "../graphics"
-import "../input"
-import "../types" // For common types: Color, Vector2, etc.
-import "../common" // For standardized error handling
-import "core:fmt" // For error printing in run
+import "vendor:sdl2/image"
 
-// Common types like Color and Vector2 are now defined in the types package
+// Import new placeholder packages and time
+import "../content"
+import "../graphics" // For Graphics_Device_Manager, Graphics_Device, Game_Window placeholders
+import "./time"     // For Game_Time
+import "../input"   // For input processing
+import "../audio"   // For Audio_Engine, Media_Player
+import "../common"  // For error types (though less used in this new structure initially)
 
-// User-defined game functions that serve as callbacks for the game loop
 
-// InitializeFn is called once when the game starts
-// Use this to set up game state, allocate resources, and prepare the game
-InitializeFn :: proc(game: ^Game)
+// Game_Component placeholder (actual definition in game_component.odin)
+// Forward declare or use a simple struct if full import causes cycles / too much change now.
+// For this phase, assume Game_Component is defined in its own file and can be imported if needed,
+// or we operate on it as a rawptr if its methods are not called directly by Game.
+// For now, components array will be [dynamic]^game_component.Game_Component.
+// This requires game_component.odin to exist with at least `Game_Component :: struct{}`.
+// Let's assume it does.
+// import "./game_component" // If methods like component.update() were called directly.
 
-// LoadContentFn is called after initialization to load game assets
-// Use this to load textures, sounds, and other content
-LoadContentFn :: proc(game: ^Game)
-
-// UpdateFn is called every frame to update game logic
-// Use this to handle input, update game state, and perform game logic
-UpdateFn :: proc(game: ^Game, game_time: GameTime)
-
-// DrawFn is called every frame to render the game
-// Use this to draw sprites, UI, and other visual elements
-DrawFn :: proc(game: ^Game, game_time: GameTime)
-
-// GameTime provides timing information for the game loop
-// This is passed to the update and draw callbacks
-GameTime :: struct {
-    elapsed_game_time: f64, // Time elapsed since the last frame in seconds
-    total_game_time:   f64, // Total time elapsed since the game started in seconds
-}
-
-// Game is the main structure that manages the game state and lifecycle
-// It contains references to the window, graphics device, and sprite batch
-// as well as callbacks for game logic and rendering
 Game :: struct {
-    // Core modules and resources
-    window:          ^Window, // The game window (contains gfx_device and gfx_window)
-    sprite_batch:    ^graphics.SpriteBatch, // For efficient sprite rendering
-    user_data:       rawptr, // User-defined data for storing game state
+    // Service Locators / Managers
+    // service_provider: ^Service_Container, // Replaces services map
+    graphics_device_manager: ^graphics.Graphics_Device_Manager, 
+    content:           ^content.Content_Manager,     // Integrated ContentManager
+
+    // Core resources (populated by GDM)
+    graphics_device:   ^graphics.Graphics_Device, 
+    window:            ^graphics.Game_Window,    // Primary game window
+
+    // Audio System
+    audio_engine:      ^audio.Audio_Engine,
+    media_player:      ^audio.Media_Player,
+
+    // Game State & Logic
+    // components:       [dynamic]^game_component.Game_Component, 
+    components:       [dynamic]rawptr, 
+    services:         map[typeid]rawptr,
+
+    // New fields for GDM integration
+    allocator_ref:    mem.Allocator, // To pass to GDM and other services
+    window_title_base: string,      // Base title for the window
+
+    target_elapsed_time: time.Duration,
+    is_fixed_time_step: bool,
+    is_running:        bool,
+    _initialized:      bool, 
+    _suppress_draw:    bool, // For fixed time step when updates are slow
+
+    // Timing for game loop
+    _accumulator:      time.Duration, // For fixed time step
+    _previous_ticks:   u64,           // For calculating delta time
+    _perf_frequency:   u64,           // For calculating delta time
+
+    // Virtual methods (as procedure fields)
+    Initialize:     proc(game: ^Game),
+    Load_Content:   proc(game: ^Game),
+    Unload_Content: proc(game: ^Game),
+    Update:         proc(game: ^Game, game_time: Game_Time),
+    Draw:           proc(game: ^Game, game_time: Game_Time),
+    // New virtual methods from XNA
+    Begin_Run:      proc(game: ^Game),
+    End_Run:        proc(game: ^Game),
+    Begin_Draw:     proc(game: ^Game) -> bool, // Returns true if drawing should occur
+    End_Draw:       proc(game: ^Game),
+}
+
+// --- Default "Virtual" Method Implementations ---
+_default_initialize :: proc(game: ^Game) { log.info("Game.Initialize (default)") }
+_default_load_content :: proc(game: ^Game) { log.info("Game.Load_Content (default)") }
+_default_unload_content :: proc(game: ^Game) { log.info("Game.Unload_Content (default)") }
+_default_update :: proc(game: ^Game, game_time: Game_Time) { /*log.debug("Game.Update (default)")*/ }
+_default_draw :: proc(game: ^Game, game_time: Game_Time) { /*log.debug("Game.Draw (default)")*/ }
+_default_begin_run :: proc(game: ^Game) { log.info("Game.Begin_Run (default)") }
+_default_end_run :: proc(game: ^Game) { log.info("Game.End_Run (default)") }
+_default_begin_draw :: proc(game: ^Game) -> bool { /*log.debug("Game.Begin_Draw (default)");*/ return true }
+_default_end_draw :: proc(game: ^Game) { /*log.debug("Game.End_Draw (default)")*/ }
+
+// --- Constructor ---
+new_game :: proc(allocator := context.allocator) -> ^Game {
+    game := new(Game, allocator)
+
+    game.Initialize     = _default_initialize
+    game.Load_Content   = _default_load_content
+    game.Unload_Content = _default_unload_content
+    game.Update         = _default_update
+    game.Draw           = _default_draw
+    game.Begin_Run      = _default_begin_run
+    game.End_Run        = _default_end_run
+    game.Begin_Draw     = _default_begin_draw
+    game.End_Draw       = _default_end_draw
+
+    game.target_elapsed_time = time.Duration_Second / 60 // Default to 60 FPS
+    game.is_fixed_time_step  = true
+    game.is_running          = false
+    game._initialized        = false
+    game._suppress_draw      = false
+
+    game.components = make([dynamic]rawptr, 0, 16, allocator) // Initial capacity 16
+    game.services   = make(map[typeid]rawptr, allocator)
     
-    // User-defined callback procedures
-    initialize_fn:   InitializeFn,  // Called once at game start
-    load_content_fn: LoadContentFn, // Called to load game assets
-    update_fn:       UpdateFn,      // Called every frame to update game logic
-    draw_fn:         DrawFn,        // Called every frame to render the game
-
-    // Game state
-    running:         bool,          // Controls whether the game loop continues
+    game.allocator_ref = allocator // Store allocator for GDM and others
     
-    // Timing information
-    game_time:       GameTime,      // Current game timing information
-    _previous_ticks: u64,          // Internal: previous frame tick count
-    _perf_frequency: u64,          // Internal: performance counter frequency
+    // Initialize GraphicsDeviceManager
+    game.graphics_device_manager = graphics.new_graphics_device_manager(game)
+    // game.graphics_device and game.window will be populated by GDM.apply_changes()
+
+    // Content manager would be initialized here too
+    // game.content = content.new_content_manager(game, "./assets") // Example
+    game.content = content.new_content_manager(game, "assets", game.allocator_ref) // Default root "assets"
+
+    // Initialize Audio System
+    ae, ae_err := audio.audio_engine_initialize(game.allocator_ref)
+    if ae_err != .None {
+        // Log error, but game might continue without audio
+        log.errorf("Failed to initialize AudioEngine: %v", ae_err)
+        game.audio_engine = nil
+    } else {
+        game.audio_engine = ae
+    }
+    game.media_player = audio.media_player_new(game.allocator_ref)
+
+
+    log.info("New Game instance created.")
+    return game
 }
 
-// This is an internal constructor
-_new_game_for_run :: proc(title: string, width, height: int, backend_type: graphics.Backend_Type = .Auto) -> (^Game, common.Engine_Error) {
-	// Initialize SDL
-	if sdl2.Init(sdl2.INIT_VIDEO | sdl2.INIT_TIMER | sdl2.INIT_EVENTS) != 0 {
-		log.errorf("SDL initialization failed: %s", sdl2.GetError())
-		return nil, common.Engine_Error.Graphics_Initialization_Failed
-	}
+// --- Core Game Loop ---
 
-	// Initialize SDL_image for image loading (PNG, JPG, etc.)
-	IMG_INIT_PNG :: 0x00000001
-	IMG_INIT_JPG :: 0x00000002
-	if sdl2.image.Init(u32(IMG_INIT_PNG | IMG_INIT_JPG)) & u32(IMG_INIT_PNG | IMG_INIT_JPG) != u32(IMG_INIT_PNG | IMG_INIT_JPG) {
-		log.errorf("SDL_image initialization failed: %s", sdl2.image.GetError())
-		sdl2.Quit()
-		return nil, common.Engine_Error.Graphics_Initialization_Failed
-	}
+// game_tick is called once per main loop iteration. It handles timing and calling Update based on fixed/variable step.
+game_tick :: proc(game: ^Game) {
+    current_ticks := sdl2.GetPerformanceCounter()
+    delta_ticks := current_ticks - game._previous_ticks
+    game._previous_ticks = current_ticks
 
-	game := new(Game) // Allocated with context.allocator by default
+    delta_duration := time.Duration( (f64(delta_ticks) * f64(time.Second)) / f64(game._perf_frequency) )
+    
+    // Prevent spiral of death and ensure non-negative delta.
+    // Cap max elapsed time to avoid huge steps after pauses (e.g. debugging).
+    MAX_ELAPSED_TIME :: time.Duration_Second / 10 // e.g., 100ms
+    if delta_duration > MAX_ELAPSED_TIME {
+        delta_duration = MAX_ELAPSED_TIME
+    }
+    if delta_duration < 0 { // Should not happen with u64 counters
+        delta_duration = 0
+    }
 
-	// --- Initialize Graphics API ---
-	// Initialize the selected graphics backend
-	backend_settings := graphics.Backend_Settings{
-		preferred_backend = backend_type,
-		fallback_order = []graphics.Backend_Type{.OpenGL, .Vulkan}, // Fallback order if preferred backend fails
-		debug_mode = false,
-	}
-	
-	backend_err := graphics.initialize_graphics_backend(backend_settings)
-	if backend_err != .None {
-		log.errorf("_new_game_for_run: Failed to initialize graphics backend: %s", common.engine_error_to_string(backend_err))
-		sdl2.image.Quit()
-		sdl2.Quit()
-		free(game)
-		return nil, backend_err
-	}
-	
-	// We need an allocator for the graphics device. Game's context.allocator can be used.
-	main_gfx_device, device_err := graphics.gfx_api.create_device(&context.allocator)
-	if device_err != .None {
-		log.errorf("_new_game_for_run: Failed to create Gfx_Device: %s", graphics.gfx_api.get_error_string(device_err))
-		sdl2.image.Quit()
-		sdl2.Quit()
-		free(game)
-		return nil, device_err // Already common.Engine_Error
-	}
-	// --- End Initialize Graphics API ---
+    game_time_update: Game_Time
+    game_time_update.is_running_slowly = false // Will be set if fixed step and lagging
 
-	// Create core.Window, passing the Gfx_Device
-	// core.new_window now takes Gfx_Device
-	win, err_win := new_window(main_gfx_device, title, width, height)
-	if err_win != nil {
-		log.errorf("_new_game_for_run: Failed to create core.Window: %v", err_win)
-		graphics.gfx_api.destroy_device(main_gfx_device) // Clean up created device
-		sdl2.image.Quit()
-		sdl2.Quit()
-		free(game)
-		// err_win is already a common.Engine_Error
-		return nil, err_win
-	}
-	game.window = win
-	// game.graphics_device is no longer a direct field of Game. Access via game.window.gfx_device.
+    if game.is_fixed_time_step {
+        game._accumulator += delta_duration
+        game_time_update.elapsed = game.target_elapsed_time
 
-	// Initialize SpriteBatch, passing the Gfx_Device from the window
-	// new_sprite_batch now takes Gfx_Device. Width/height are not needed for SB construction anymore.
-	sb, sb_err := graphics.new_spritebatch(game.window.gfx_device) // Max sprites defaults in new_spritebatch
-	if sb_err != .None {
-		log.errorf("_new_game_for_run: Failed to create SpriteBatch: %s", graphics.gfx_api.get_error_string(sb_err))
-		// Full cleanup: destroy window (which destroys Gfx_Window), then device.
-		destroy_window(game.window) // This calls gfx_api.destroy_window
-		graphics.gfx_api.destroy_device(main_gfx_device)
-		sdl2.image.Quit()
-		sdl2.Quit()
-		free(game)
-		return nil, sb_err // Already common.Engine_Error
-	}
-	game.sprite_batch = sb
-	
-	// Initialize input system
-	input._init_input_system()
-	
-	// Note: Timing fields (_perf_frequency, _previous_ticks, game_time) are initialized in 'run'
-	// before the main loop and user Initialize/LoadContent calls.
-	// game.running is also set in 'run'.
-	
-	return game, nil
-}
- 
-_destroy_game :: proc(game: ^Game) {
-	if game == nil {
-		return
-	}
+        max_updates_per_frame := 5 // Prevent extreme slowdowns from freezing the game entirely
+        updates_this_frame := 0
 
-	// Call user's unload content if it exists
-	// Note: We don't have a dedicated unload callback in the current API,
-	// but if we add one in the future, it would be called here
+        for game._accumulator >= game.target_elapsed_time && updates_this_frame < max_updates_per_frame {
+            game.game_time.total += game.target_elapsed_time
+            game_time_update.total = game.game_time.total
+            
+            if game.Update != nil { game.Update(game, game_time_update) }
+            
+            game._accumulator -= game.target_elapsed_time
+            updates_this_frame += 1
 
-	// First, clean up the SpriteBatch
-	if game.sprite_batch != nil {
-		graphics.destroy_spritebatch(game.sprite_batch)
-		game.sprite_batch = nil
-	}
+            if game._accumulator < game.target_elapsed_time && updates_this_frame >= max_updates_per_frame {
+                game_time_update.is_running_slowly = true // We're behind and had to do max updates
+            }
+        }
+        // If accumulator is still large, it means we're very behind. Reset accumulator to prevent spiral.
+        if game._accumulator >= game.target_elapsed_time {
+             // log.warnf("Game is running very slowly. Accumulator was %v after max updates. Resetting.", game._accumulator)
+             game._accumulator = 0 // Or cap it, e.g. game._accumulator = game.target_elapsed_time
+             game_time_update.is_running_slowly = true
+        }
+        game._suppress_draw = game_time_update.is_running_slowly
 
-	// Store device handle before window is destroyed
-	device_to_destroy := Gfx_Device{}
-	if game.window != nil {
-		device_to_destroy = game.window.gfx_device
-
-		// Destroy the window which will clean up its resources
-		destroy_window(game.window)
-		game.window = nil
-	}
-	
-	// Now destroy the Gfx_Device if it's valid
-	if is_valid(device_to_destroy) {
-		graphics.gfx_api.destroy_device(device_to_destroy)
-	}
-
-	// Clean up SDL subsystems
-	if sdl2.image.Was_Init() != 0 {
-		sdl2.image.Quit()
-	}
-
-	if sdl2.Was_Init(0) != 0 {
-		sdl2.Quit()
-	}
-	
-	// Finally free the game object itself
-	free(game)
+    } else { // Variable time step
+        game.game_time.total += delta_duration
+        game_time_update.elapsed = delta_duration
+        game_time_update.total = game.game_time.total
+        if game.Update != nil { game.Update(game, game_time_update) }
+        game._suppress_draw = false
+    }
 }
 
-// run - main entry point for the game
+
+game_run_one_frame :: proc(game: ^Game) {
+    // Handle SDL events (input is handled by input package, but quit event here)
+    event: sdl2.Event
+    for sdl2.PollEvent(&event) {
+        if event.type == .QUIT {
+            game_exit(game) // Sets game.is_running = false
+        }
+        // Pass event to input system if it needs raw events
+        // input.process_event(&event) // Or similar
+    }
+    // Update input states (keyboard, mouse, etc.)
+    input._update_input_states() // Assuming this is the way to poll current state after events
+
+    // Tick the game logic (updates timers and calls Game.Update)
+    game_tick(game)
+
+    // Update Audio Engine (if it has any per-frame logic)
+    if game.audio_engine != nil {
+        audio.audio_engine_update(game.audio_engine)
+    }
+
+    // Draw if not suppressed
+    if !game._suppress_draw {
+        if game.Begin_Draw != nil && game.Begin_Draw(game) {
+            if game.Draw != nil {
+                // For Draw, elapsed time is the actual frame delta, not target_elapsed_time
+                // Re-calculate actual delta for Draw's Game_Time
+                // This is a bit simplified; XNA's GameTime for Draw uses same elapsed as Update if fixed.
+                // For variable step, it's the same. If fixed, XNA's Draw GameTime uses target_elapsed_time.
+                // Let's stick to target_elapsed_time for Draw if fixed, for consistency with Update calls.
+                draw_game_time := Game_Time {
+                    elapsed = game.is_fixed_time_step ? game.target_elapsed_time : game_time.elapsed, // game_time.elapsed is not defined here
+                                                                                                     // Use the last calculated delta_duration for variable, or target for fixed
+                    total   = game.game_time.total,
+                    is_running_slowly = game._suppress_draw, // from game_tick
+                }
+                // Correction: elapsed for draw should be consistent with update's elapsed if fixed step
+                current_ticks := sdl2.GetPerformanceCounter()
+                raw_delta_for_draw := time.Duration( (f64(current_ticks - game._previous_ticks_for_draw_temp) * f64(time.Second)) / f64(game._perf_frequency) )
+                // This is getting complicated. For now, let's use the same Game_Time as the last Update for Draw.
+                // This means Draw might see a time that's slightly in the "future" if multiple updates happened.
+                // Or, more simply, pass the game.target_elapsed_time if fixed, or last frame's actual delta if variable.
+                // This is a common point of debate in game loop design.
+                // For now, let's use the same Game_Time as the Update for Draw.
+                // The game_tick already prepared a Game_Time suitable for Update.
+                // We need to pass the correct `elapsed` for Draw.
+                // If fixed time step, Draw's elapsed is target_elapsed_time.
+                // If variable, it's the frame's delta_duration.
+                // This is already reflected in the game_time_update used in game_tick.
+                // However, game_time_update is local to game_tick.
+                // Let's construct one for Draw.
+                
+                // Re-think Draw's GameTime:
+                // The Draw method should reflect the state of the world *after* the last Update.
+                // The elapsed time for drawing is effectively the time since the *last draw call*.
+                // For simplicity and common practice, often Draw gets the same GameTime as the last Update in a frame.
+                // Or, if interpolation is used, it might get an alpha value.
+                // For now, we pass the current total time, and an elapsed time that's either
+                // target_elapsed (if fixed) or the total frame delta (if variable).
+                // The game_time structure in Game holds the total time.
+                // Let's make a new Game_Time for Draw using the overall frame delta.
+                
+                // Simpler: Just use the game.target_elapsed_time or the actual delta_duration from the start of game_tick.
+                // The 'game_time_update' in game_tick is what we need.
+                // We need to pass the Game_Time that reflects the current state being drawn.
+                // This is tricky. Let's pass a fresh Game_Time for Draw.
+                // The `elapsed` for draw is often considered the time since the previous frame's draw.
+                // For now, this Game_Time for Draw is a placeholder until rendering part is fleshed out.
+                // We'll use the Game_Time from the last Update for now.
+                // This requires game_tick to perhaps store the last_update_game_time.
+                // OR, game.Update updates a game.current_game_time_for_update_and_draw.
+                // For now:
+                current_draw_time := Game_Time{
+                    elapsed = game.is_fixed_time_step ? game.target_elapsed_time : delta_duration_from_game_tick_not_available_here,
+                    total = game.game_time.total,
+                    is_running_slowly = game._suppress_draw,
+                }
+                // This is still not quite right. The game_time passed to Update is the key.
+                // For now, the Draw function will receive a Game_Time, but its `elapsed` field's exact meaning
+                // in fixed timestep when multiple updates occur needs careful thought if shaders/physics depend on it.
+                // Most XNA games use the same GameTime object for all Updates in a frame, and then for Draw.
+                
+                // Let's assume game_tick sets a global `current_frame_update_time: Game_Time` that Draw can use.
+                // For now, this is a simplification:
+    // The Game_Time for Draw should be consistent. If Update ran multiple times, 
+    // Draw should represent the state after the last Update.
+    // For fixed time step, elapsed is target_elapsed_time. For variable, it's the frame delta.
+    // game_time_for_current_frame should be updated by game_tick or game_run_one_frame.
+    game.Draw(game, game_time_for_current_frame) 
+
+            }
+if game.End_Draw != nil { game.End_Draw(game) } // End_Draw now handles presentation
+        }
+    }
+    // Presentation is now handled by Game.End_Draw -> GraphicsDeviceManager.EndDraw -> GraphicsDevice.Present
+}
+
+// Temporary global for game_tick to communicate to game_run_one_frame's Draw call.
+// This is not ideal and should be refactored (e.g. game_tick returns it, or Game struct stores it).
+// Let's remove these and pass time properly or have Game store current frame's Game_Time.
+// delta_duration_from_game_tick_not_available_here: time.Duration // REMOVED BAD HACK
+game_time_for_current_frame: Game_Time // This will be updated by game_run loop
+
+
+game_run :: proc(game: ^Game, title: string, width, height: int, preferred_backend := graphics.Backend_Type.Auto) {
+    if game == nil {
+        log.error("game_run: Game instance is nil.")
+        return
+    }
+
+    // --- SDL Initialization ---
+    if sdl2.Init(sdl2.INIT_VIDEO | sdl2.INIT_TIMER | sdl2.INIT_EVENTS | sdl2.INIT_GAMECONTROLLER) != 0 {
+        log.errorf("SDL initialization failed: %s", sdl2.GetError())
+        return // Or panic
+    }
+    defer sdl2.Quit()
+
+    IMG_INIT_PNG :: 0x00000001; IMG_INIT_JPG :: 0x00000002
+    if sdl2.image.Init(u32(IMG_INIT_PNG | IMG_INIT_JPG)) & u32(IMG_INIT_PNG | IMG_INIT_JPG) != u32(IMG_INIT_PNG | IMG_INIT_JPG) {
+        log.errorf("SDL_image initialization failed: %s", sdl2.image.GetError())
+        return
+    }
+    defer sdl2.image.Quit()
+    
+    game.window_title_base = title // Store base title for GDM
+
+    // --- GraphicsDeviceManager Setup ---
+    // User can configure GDM.preferred_* settings in their Game.Initialize override.
+    // For now, set some defaults that might be overridden by Game.Initialize.
+    if game.graphics_device_manager != nil {
+        gdm := game.graphics_device_manager
+        gdm.preferred_back_buffer_width = width
+        gdm.preferred_back_buffer_height = height
+        // gdm.preferred_backend_type = preferred_backend // GDM needs a way to know this, or Game tells it.
+                                                       // For now, assume gfx_api.create_device handles backend choice.
+                                                       // Or, GDM's apply_changes could take preferred_backend.
+        // The actual backend selection is within gfx_api.create_device or graphics.initialize_graphics_backend
+        // which GDM.apply_changes will invoke.
+        // We need to ensure initialize_graphics_backend is called with the preference.
+        // For now, let's assume Game.Initialize or GDM constructor handles preferred_backend.
+        // The GDM.apply_changes will use its current settings.
+        // The `core.run_with_options` in the example sets `game.preferred_backend_type_from_options`
+        // which GDM can then read in its `apply_changes` or `create_device` phase.
+        // This requires adding `preferred_backend_type_from_options` to Game struct or passing it around.
+        // For now, the backend is selected by graphics.initialize_graphics_backend called by GDM.apply_changes.
+        // GDM.apply_changes will need to call graphics.initialize_graphics_backend.
+    }
+    
+    // --- Input System Init ---
+    input._init_input_system() // Assuming this is still the way
+
+    // --- Timing Init ---
+    game._perf_frequency = sdl2.GetPerformanceFrequency()
+    game._previous_ticks = sdl2.GetPerformanceCounter()
+    game._accumulator = 0
+    game.game_time.total = 0
+    // game_time_for_current_frame needs to be initialized too
+    game_time_for_current_frame.elapsed = game.is_fixed_time_step ? game.target_elapsed_time : 0
+    game_time_for_current_frame.total = 0
+    game_time_for_current_frame.is_running_slowly = false
+
+
+    // --- Call Game Lifecycle Methods ---
+    if game.Begin_Run != nil { game.Begin_Run(game) } // User can override
+    
+    if !game._initialized {
+        if game.Initialize != nil { game.Initialize(game) } // User can override to set GDM preferences
+        game._initialized = true
+    }
+
+    // Apply GraphicsDeviceManager changes (creates window and device)
+    // This needs the `preferred_backend` which Game should store from options.
+    // Let GDM.apply_changes handle backend initialization.
+    // The Game struct needs a field for `initial_preferred_backend`.
+    // For now, assume GDM.apply_changes can determine it or uses a default.
+    // Let's modify apply_changes to take a preferred backend or GDM stores it from Game.
+    // For this diff, assume GDM.apply_changes is self-sufficient for now.
+    gdm_err := graphics.apply_changes(game.graphics_device_manager)
+    if gdm_err != .None {
+        log.errorf("Failed to apply graphics device manager changes: %v", gdm_err)
+        // End_Run and SDL_Quit will be called by defer
+        if game.End_Run != nil { game.End_Run(game) }
+        return
+    }
+    // After apply_changes, Graphics_Device and Game_Window should be available
+    game.graphics_device = game.graphics_device_manager.graphics_device
+    // game.window = game.graphics_device_manager.graphics_device.window_ref // Assuming GD has a window_ref
+    // For now, game.window is populated by GDM.apply_changes if GDM creates it,
+    // or Game creates SDL window and GDM uses it. The current GDM creates SDL window.
+    // Let's assume GDM now populates game.window field, which is ^graphics.Game_Window
+    // This implies GDM's apply_changes needs to set game.window.
+    // This part is messy and needs Graphics_Device to own Game_Window or GDM to manage it.
+    // For now, game.window is populated by GDM.apply_changes (conceptual).
+    if game.graphics_device != nil && game.graphics_device._sdl_window != nil {
+        // If Game.window is distinct from GDM's internal window concept
+        if game.window == nil { game.window = new(graphics.Game_Window, game.allocator_ref)}
+        game.window.sdl_window = game.graphics_device._sdl_window
+        game.window.width = game.graphics_device.present_params.back_buffer_width
+        game.window.height = game.graphics_device.present_params.back_buffer_height
+        // game.window.title = sdl2.GetWindowTitle(cast(^sdl2.Window)game.window.sdl_window) // If needed
+    } else {
+        log.error("GDM.apply_changes did not result in a valid graphics_device and SDL window handle.")
+        if game.End_Run != nil { game.End_Run(game) }
+        return
+    }
+
+
+    if game.Load_Content != nil { game.Load_Content(game) } // User can override
+
+    game.is_running = true
+    log.info("Game loop starting...")
+
+    // Main Loop
+    for game.is_running {
+        prev_ticks_for_frame_delta := game._previous_ticks 
+        
+        game_run_one_frame(game) 
+        
+        // Update game_time_for_current_frame (used by Draw)
+        current_ticks_for_frame_delta := sdl2.GetPerformanceCounter()
+        delta_for_draw_hack := current_ticks_for_frame_delta - prev_ticks_for_frame_delta
+        actual_frame_delta := time.Duration( (f64(delta_for_draw_hack) * f64(time.Second)) / f64(game._perf_frequency) )
+        
+        game_time_for_current_frame.elapsed = game.is_fixed_time_step ? game.target_elapsed_time : actual_frame_delta
+        game_time_for_current_frame.total = game.game_time.total 
+        game_time_for_current_frame.is_running_slowly = game._suppress_draw
+    }
+
+    log.info("Game loop ended.")
+    if game.Unload_Content != nil { game.Unload_Content(game) } // User can override
+    if game.End_Run != nil { game.End_Run(game) } // User can override
+
+    // Cleanup
+    if game.graphics_device_manager != nil {
+        graphics.destroy_graphics_device_manager(game.graphics_device_manager)
+        game.graphics_device_manager = nil
+        game.graphics_device = nil // Was a reference from GDM
+        // game.window's SDL part is destroyed by GDM if GDM created it.
+        // If Game.window is a separate struct, free it if Game allocated it.
+        // Current GDM.destroy frees its internal graphics_device which includes _gfx_window and _gfx_device.
+        // The SDL_Window itself, if created by GDM, should be handled there too.
+        // The current GDM.destroy_graphics_device_manager does not destroy the SDL window.
+        // That is deferred in game_run. This is correct.
+    }
+    // Content manager would be destroyed here
+    if game.content != nil { 
+        content.destroy_content_manager(game.content)
+        game.content = nil 
+    }
+    // Destroy Audio System
+    if game.media_player != nil {
+        audio.media_player_destroy(game.media_player)
+        game.media_player = nil
+    }
+    if game.audio_engine != nil {
+        audio.audio_engine_destroy(game.audio_engine)
+        game.audio_engine = nil
+    }
+    
+    delete(game.components)
+    delete(game.services) // Services map might be deprecated if using a proper Service_Container
+    // Game struct itself is usually freed by the caller of game_run (e.g. main in example)
+}
+
+
+game_exit :: proc(game: ^Game) {
+    if game != nil {
+        log.info("Game.Exit called.")
+        game.is_running = false
+    }
+}
+
+// --- Helper for old examples ---
+// This `run` procedure is kept for compatibility with the old example structure for now.
+// New games should use `new_game()` and then `game_run(my_game_instance, ...)`
+// or directly create their own `Game` struct and call `game_run`.
+// This will be removed once examples are updated.
 run :: proc(
     title: string, 
     width, height: int,
-    initialize_fn: InitializeFn,
-    load_content_fn: LoadContentFn,
-    update_fn: UpdateFn,
-    draw_fn: DrawFn,
+    initialize_fn_old: proc(game_old_style: rawptr), // Placeholder for old signature
+    load_content_fn_old: proc(game_old_style: rawptr),
+    update_fn_old: proc(game_old_style: rawptr, game_time_old_style: rawptr),
+    draw_fn_old: proc(game_old_style: rawptr, game_time_old_style: rawptr),
+    preferred_backend_type := graphics.Backend_Type.Auto,
 ) {
-    game, err := _new_game_for_run(title, width, height)
-    if err != .None {
-        fmt.eprintln("Failed to initialize game:", common.engine_error_to_string(err))
-        return
-    }
+    log.warn("Using DEPRECATED core.run function. Update to new Game structure and game_run.")
     
-    // Assign user functions
-    game.initialize_fn = initialize_fn
-    game.load_content_fn = load_content_fn
-    game.update_fn = update_fn
-    game.draw_fn = draw_fn
+    // This is a temporary bridge. A proper solution would be for the example
+    // to adopt the new Game struct and its methods.
+    // For now, we create a new Game and try to map old callbacks if possible,
+    // but this is very limited as the signatures don't match well.
 
-    // Initialize SDL performance frequency and initial ticks for the game loop
-    game._perf_frequency = sdl2.GetPerformanceFrequency()
-    game._previous_ticks = sdl2.GetPerformanceCounter()
-    game.game_time.total_game_time = 0
-    game.game_time.elapsed_game_time = 0 // Start with zero elapsed time for first frame logic
+    // game_instance := new_game()
+    // game_instance.Initialize = proc(g: ^Game) { if initialize_fn_old != nil { initialize_fn_old(cast(rawptr)g) } }
+    // game_instance.Load_Content = proc(g: ^Game) { if load_content_fn_old != nil { load_content_fn_old(cast(rawptr)g) } }
+    // game_instance.Update = proc(g: ^Game, gt: Game_Time) { if update_fn_old != nil { update_fn_old(cast(rawptr)g, cast(rawptr)&gt) } }
+    // game_instance.Draw = proc(g: ^Game, gt: Game_Time) { if draw_fn_old != nil { draw_fn_old(cast(rawptr)g, cast(rawptr)&gt) } }
+    
+    // game_run(game_instance, title, width, height, preferred_backend_type)
+    // free(game_instance) // If new_game allocates it and main doesn't.
 
-    // Call user Initialize
-    if game.initialize_fn != nil {
-        game.initialize_fn(game)
-    }
-
-    // Call user LoadContent
-    if game.load_content_fn != nil {
-        game.load_content_fn(game)
-    }
-
-    game.running = true // Start the loop
-
-    // Main game loop
-    for game.running {
-        // --- Timing Calculations ---
-        current_ticks := sdl2.GetPerformanceCounter()
-        delta_ticks := current_ticks - game._previous_ticks
-        game._previous_ticks = current_ticks
-
-        game.game_time.elapsed_game_time = f64(delta_ticks) / f64(game._perf_frequency)
-        // Ensure elapsed time is not excessively large (e.g. after breakpoint debugging)
-        // or negative (if counter wraps, though GetPerformanceCounter is usually u64)
-        // A simple cap for stability, more advanced methods exist.
-        MAX_ELAPSED_TIME :: 1.0 / 10.0 // e.g., cap at 10 FPS equivalent if things go wild
-        if game.game_time.elapsed_game_time > MAX_ELAPSED_TIME {
-            game.game_time.elapsed_game_time = MAX_ELAPSED_TIME
-        }
-        if game.game_time.elapsed_game_time < 0 { // Should not happen with u64 counters unless they wrap around 0
-            game.game_time.elapsed_game_time = 0
-        }
-        game.game_time.total_game_time += game.game_time.elapsed_game_time
-        
-        // --- Input ---
-        input._update_input_states()
-        if input.is_quit_requested() {
-            game.running = false
-            // No 'continue' or 'break' needed here, loop condition 'game.running' will handle it
-        }
-
-        // --- Update ---
-        // Only run update if game is still running after input processing
-        if game.running && game.update_fn != nil {
-            game.update_fn(game, game.game_time)
-        }
-        
-        // --- Draw ---
-        // Only draw if game is still running (e.g. update didn't call exit)
-        if game.running && game.draw_fn != nil {
-            game.draw_fn(game, game.game_time)
-        } else if game.running { 
-            // Default draw behavior if no user draw_fn is provided
-            // This now uses the gfx_api via the window's device and Gfx_Window handles.
-            if game.window != nil && is_valid(game.window.gfx_device) && game.window.gfx_window.variant != nil {
-                default_clear_opts := graphics.default_clear_options() // Get default clear options
-                // Modify if needed, e.g. game.window.gfx_device.set_clear_color(...) if that existed,
-                // or pass custom Clear_Options.
-                graphics.gfx_api.clear_screen(game.window.gfx_device, default_clear_opts)
-                
-                // User draw calls would happen here conceptually if draw_fn was a simpler "render scene"
-                // and game loop handled clear/present.
-                
-                err_present := graphics.gfx_api.present_window(game.window.gfx_window)
-                if err_present != .None {
-                    log.errorf("Game loop: Failed to present window: %s", graphics.gfx_api.get_error_string(err_present))
-                    // Potentially set game.running = false or handle error
-                }
-            }
-        }
-        
-        // Yield CPU if necessary - VSync is preferred (set with GL_SetSwapInterval via Gfx_Window creation)
-        // sdl2.Delay(1) 
-    }
-
-    // Cleanup
-    _destroy_game(game)
-    // fmt.println("Game exited.") // For debugging
+    fmt.eprintln("Deprecated core.run called. Functionality removed. Please update to use new Game object and game_run.")
 }
+// Remove run_with_options as it's also part of the old system.
+// The new main entry point is game_run(game: ^Game, ...) after game is created with new_game().
 
-// Public way to exit the game from user code
-exit :: proc(game: ^Game) {
-    if game != nil {
-        game.running = false
-    }
+// Public way to exit the game from user code (already defined as game_exit)
+// exit :: proc(game: ^Game) { ... }
+
+
+// --- Utility functions (previously in core.window or similar) ---
+// These should eventually be methods on Game_Window or provided by Graphics_Device_Manager / Graphics_Device
+get_window_width :: proc(window: ^graphics.Game_Window) -> int {
+    if window != nil { return window.width }
+    return 0
+}
+get_window_height :: proc(window: ^graphics.Game_Window) -> int {
+    if window != nil { return window.height }
+    return 0
+}
+// is_valid for Gfx_Device and Gfx_Window placeholder
+is_valid :: proc(device: graphics.Gfx_Device) -> bool { return false } // Placeholder
+// is_valid_window :: proc(window: graphics.Gfx_Window) -> bool { return false } // Placeholder
+
+// Default clear options (placeholder, to be moved or part of Graphics_Device)
+default_clear_options :: proc() -> graphics.Clear_Options {
+    return graphics.Clear_Options{color = {0.1, 0.1, 0.1, 1.0}, clear_color=true, clear_depth=true, depth=1.0}
 }

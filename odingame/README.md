@@ -9,12 +9,12 @@ This is an initial version focusing on the core functionalities.
 ## Core Features
 
 - **Windowing:** Creation and management of the game window.
-- **Graphics Device:** Basic OpenGL context initialization and control.
-- **SpriteBatch:** Efficient 2D sprite rendering with transformations (position, scale, rotation - Note: SpriteBatch uses batched rendering for efficiency).
-- **Texture Loading:** Loading `Texture2D` assets from image files (e.g., PNG via SDL_image).
+- **Graphics Device:** Abstracted graphics device operations via `Gfx_Device_Interface`, supporting multiple backends (OpenGL, Vulkan, with experimental DirectX/Metal planned).
+- **SpriteBatch:** Efficient 2D sprite rendering with transformations (position, scale, rotation) using a retained batching system.
+- **Texture Loading:** Loading `Gfx_Texture` assets from image files (e.g., PNG via SDL_image).
 - **Input Handling:** Processing keyboard and mouse input.
 - **Game Loop:** Structured `Initialize`, `LoadContent`, `Update`, `Draw` game loop.
-- **Basic Math Types:** Essential math types like `Vector2f`, `Matrix4f`, `Recti`.
+- **Basic Math Types:** Essential math types like `Vector2`, `Matrix4f`, `Recti`, often aliasing `core:linalg` types.
 
 ## Core API Overview
 
@@ -27,26 +27,30 @@ The heart of your game.
 - **User-defined Functions:**
   - `InitializeFn: proc(game: ^core.Game)`: Called once at the start to initialize game-specific data.
   - `LoadContentFn: proc(game: ^core.Game)`: Called once after Initialize to load game assets.
-  - `UpdateFn: proc(game: ^core.Game, game_time: core.GameTime)`: Called every frame to update game logic.
-  - `DrawFn: proc(game: ^core.Game, game_time: core.GameTime)`: Called every frame to draw the game.
-- `core.GameTime`: Provides `elapsed_game_time` and `total_game_time`.
+  - `UpdateFn: proc(game: ^core.Game)`: Called every frame to update game logic. Note: `GameTime` is a member of `^core.Game`.
+  - `DrawFn: proc(game: ^core.Game)`: Called every frame to draw the game. Note: `GameTime` is a member of `^core.Game`.
+- `core.GameTime`: Provides `elapsed_game_time` (seconds) and `total_game_time` (seconds).
 
-### `graphics.Device`
-Manages the underlying graphics context.
-- `graphics.clear(dev: ^graphics.Device, color: graphics.Color)`: Clears the screen to a specified color.
-- `graphics.present(dev: ^graphics.Device, window: ^core.Window)`: Swaps the back buffer to the front, displaying the rendered frame.
+### `graphics` and `gfx_api`
+Graphics operations are performed through a global interface `gfx_api: Gfx_Device_Interface`. This interface abstracts backend-specific implementations (OpenGL, Vulkan, etc.). The functions typically operate on handles like `Gfx_Device` and `Gfx_Window` obtained during initialization.
+
+Example operations:
+- `gfx_api.clear_screen(game.window.gfx_device, clear_options)`: Clears the screen.
+- `gfx_api.present_window(game.window.gfx_window)`: Swaps the back buffer to the front.
+- `gfx_api.create_texture(...)`, `gfx_api.destroy_buffer(...)`, etc.
 
 ### `graphics.SpriteBatch`
-Used for drawing 2D sprites.
-- `graphics.new_sprite_batch(dev: ^graphics.Device, window_width, window_height: int) -> (^graphics.SpriteBatch, error)`: Creates a new sprite batcher.
-- `graphics.begin(sb: ^graphics.SpriteBatch, model_view_matrix: Maybe(math.Matrix4f))`: Prepares for drawing sprites. An optional custom model-view matrix can be supplied.
-- `graphics.draw(sb: ^graphics.SpriteBatch, texture: ^graphics.Texture2D, position: math.Vector2f, source_rect: Maybe(math.Recti), color: graphics.Color, rotation_radians: f32, origin: math.Vector2f, scale: math.Vector2f)`: Draws a sprite with full transformation options.
-- `graphics.draw_simple(sb: ^graphics.SpriteBatch, texture: ^graphics.Texture2D, position: math.Vector2f, color: graphics.Color)`: Simplified draw call.
-- `graphics.end(sb: ^graphics.SpriteBatch)`: Flushes any batched sprites and finalizes drawing for the current batch.
+Used for drawing 2D sprites efficiently.
+- `graphics.new_spritebatch(device: Gfx_Device, max_sprites: int = MAX_SPRITES_DEFAULT) -> (^SpriteBatch, common.Engine_Error)`: Creates a new sprite batcher.
+- `graphics.begin_batch(sb: ^SpriteBatch, projection_view_matrix: math.Matrix4f)`: Prepares for drawing sprites, setting the transformation matrix.
+- `graphics.draw_texture(sb: ^SpriteBatch, texture: Gfx_Texture, position: math.Vector2, tint: math.Color = WHITE, origin: math.Vector2 = {0,0}, scale: math.Vector2 = {1,1}, rotation: f32 = 0)`: Draws a full texture.
+- `graphics.draw_texture_region(sb: ^SpriteBatch, texture: Gfx_Texture, src_rect: math.Rectangle, dst_rect: math.Rectangle, tint: math.Color = WHITE, origin: math.Vector2 = {0,0}, rotation: f32 = 0)`: Draws a region of a texture.
+- `graphics.end_batch(sb: ^SpriteBatch)`: Flushes any batched sprites to the GPU.
 
-### `graphics.Texture2D`
+### `Gfx_Texture`
 Represents a 2D texture.
-- `graphics.texture_from_file(filepath: string) -> (^graphics.Texture2D, error)`: Loads a texture from an image file.
+- `graphics.load_texture_from_file(device: Gfx_Device, filepath: string, generate_mipmaps: bool = true) -> (texture: Gfx_Texture, err: common.Engine_Error)`: Loads a texture from an image file.
+- `graphics.destroy_texture(tex: ^Gfx_Texture)`: Releases a reference to the texture.
 
 ### `input`
 Provides access to keyboard and mouse state.
@@ -57,13 +61,10 @@ Provides access to keyboard and mouse state.
 - `input.is_mouse_button_down(button_index: int) -> bool` (0:left, 1:middle, 2:right)
 - `input.is_mouse_button_pressed(button_index: int) -> bool`
 - `input.get_mouse_scroll_delta() -> (dx: i32, dy: i32)`
+- `input.is_quit_requested() -> bool`
 
-### `math`
-Contains basic math types.
-- `math.Vector2f`, `math.Vector2i`
-- `math.Rectf`, `math.Recti`
-- `math.Matrix4f`
-- Helper functions like `math.orthographic_projection`.
+### `types` and `core:math`
+The `types` package provides common data structures like `Vector2`, `Color`, `Rectf`, `Recti`, `Matrix4f`, often aliasing or based on types from `core:math`. Users can directly leverage `core:math` for more advanced mathematical operations.
 
 ## How to Structure Your Game
 

@@ -8,8 +8,8 @@ A modern, cross-platform game development framework for the [Odin Programming La
 - **Multiple Graphics Backends**:
   - OpenGL (fully implemented)
   - Vulkan (fully implemented)
-  - DirectX (Windows only, stub implementation - **not yet functional**)
-  - Metal (macOS only, stub implementation - **not yet functional**)
+  - DirectX (Windows only, experimental support)
+  - Metal (macOS only, experimental support)
 - **Automatic Backend Selection**: Chooses the best available graphics API for the current platform
 - **Sprite Rendering**: Efficient 2D sprite batching system
 - **Input Handling**: Keyboard, mouse, and gamepad support
@@ -33,8 +33,8 @@ A modern, cross-platform game development framework for the [Odin Programming La
 
 2. Build the example:
    ```bash
-   cd odingame/examples/basic
-   odin build . -out:basic_example
+   cd odingame/examples/simple_game
+   odin build . -out:simple_game_example
    ```
 
 ### Basic Example
@@ -42,13 +42,14 @@ A modern, cross-platform game development framework for the [Odin Programming La
 ```odin
 package main
 
+import "core:math"
 import "../../odingame/core"
-import "../../odingame/graphics"
+import "../../odingame/graphics" // For graphics.gfx_api, graphics.default_clear_options() etc.
 import "../../odingame/types"
 
 // Game state
 Game_State :: struct {
-    using game: ^core.Game,
+    using game: ^core.Game, // Provides easy access to game fields like sprite_batch, window
     texture: graphics.Gfx_Texture,
 }
 
@@ -56,7 +57,7 @@ Game_State :: struct {
 initialize :: proc(game: ^core.Game) {
     state := new(Game_State)
     state.game = game
-    game.user_data = state
+    game.user_data = state // Store our game state in the user_data pointer
 }
 
 // Load game content
@@ -64,51 +65,62 @@ load_content :: proc(game: ^core.Game) {
     state := cast(^Game_State)game.user_data
     
     // Load a texture
-    texture, err := graphics.load_texture(game.window.gfx_device, "assets/sprite.png")
+    texture, err := graphics.load_texture_from_file(game.window.gfx_device, "assets/sprite.png")
     if err != .None {
-        core.exit_game(game)
+        core.exit(game) // Use core.exit to signal game termination
         return
     }
     state.texture = texture
 }
 
-// Update game logic
-update :: proc(game: ^core.Game, game_time: core.GameTime) {
+// Update game logic (game_time is now accessed via game.game_time)
+update :: proc(game: ^core.Game) {
     // Handle input and update game state here
+    // Example: if input.is_key_pressed(.Escape) { core.exit(game) }
 }
 
-// Draw the game
-draw :: proc(game: ^core.Game, game_time: core.GameTime) {
+// Draw the game (game_time is now accessed via game.game_time)
+draw :: proc(game: ^core.Game) {
     state := cast(^Game_State)game.user_data
     
-    // Clear the screen
-    graphics.clear(game.window.gfx_device, types.BLACK)
+    // Clear the screen using the Gfx_Device_Interface
+    opts := graphics.default_clear_options()
+    opts.color = [4]f32{0.1, 0.1, 0.1, 1.0} // Dark gray, matching default_clear_options for this example
+    // For pure black, you could use: opts.color = types.BLACK_F32VEC4 or [4]f32{0,0,0,1}
+    // Ensure types.BLACK_F32VEC4 is defined in your types module if you use it, e.g. types.BLACK_F32VEC4 :: [4]f32{0,0,0,1}
+    graphics.gfx_api.clear_screen(game.window.gfx_device, opts)
+    
+    // Define a simple orthographic projection matrix
+    projection_matrix := math.orthographic_projection_2d(
+        0,                                 // left
+        f32(game.window.width),            // right
+        f32(game.window.height),           // bottom
+        0,                                 // top
+        -1,                                // near
+        1,                                 // far
+    )
     
     // Begin drawing sprites
-    graphics.begin(game.sprite_batch)
+    graphics.begin_batch(game.sprite_batch, projection_matrix)
     
     // Draw a sprite at position (100, 100)
-    graphics.draw(game.sprite_batch, state.texture, types.Vector2{100, 100})
+    graphics.draw_texture(game.sprite_batch, state.texture, types.Vector2{100, 100})
     
     // End drawing sprites
-    graphics.end(game.sprite_batch)
+    graphics.end_batch(game.sprite_batch)
 }
 
 main :: proc() {
-    // Create a new game with a 800x600 window
-    game := core.create_game("My First OdinGame", 800, 600)
-    
-    // Set up game callbacks
-    game.initialize_fn = initialize
-    game.load_content_fn = load_content
-    game.update_fn = update
-    game.draw_fn = draw
-    
-    // Run the game
-    core.run(game)
-    
-    // Clean up
-    core.destroy_game(game)
+    // Run the game by directly passing callback functions
+    core.run(
+        "My First OdinGame", 
+        800, 
+        600, 
+        initialize, 
+        load_content, 
+        update, 
+        draw,
+    )
 }
 ```
 
@@ -130,7 +142,7 @@ OdinGame automatically selects the best available graphics backend for the curre
 2. On macOS: Metal > OpenGL
 3. On Linux: Vulkan > OpenGL
 
-You can also manually specify a backend using `graphics.Backend_Type` when creating a game.
+The preferred backend can also be influenced by passing `Backend_Settings` to `core.run` or by an explicit call to `graphics.initialize_graphics_backend` before `core.run` if more control over fallback order is needed.
 
 ## API Reference
 
@@ -142,4 +154,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the GNU Lesser General Public License v2.1 (LGPL-2.1) - see the LICENSE file for details.

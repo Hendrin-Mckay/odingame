@@ -29,17 +29,21 @@ MTLVertexDescriptor_Handle :: distinct rawptr
 CAMetalLayer_Handle :: distinct rawptr 
 // NSView_Handle or similar for the view hosting the CAMetalLayer
 View_Handle :: distinct rawptr 
-
+NSWindow_Handle :: distinct rawptr // For window operations like setTitle
+NSString_Handle :: distinct rawptr // For Objective-C strings
 
 // --- Metal Specific Internal Structs ---
 
 // Mtl_Device_Internal: Stores core Metal device and command queue.
 // This will be the variant data for Gfx_Device.
 Mtl_Device_Internal :: struct {
-	device:          MTLDevice_Handle
-	command_queue:   MTLCommandQueue_Handle
+	device:                  MTLDevice_Handle,
+	command_queue:           MTLCommandQueue_Handle,
+    active_command_buffer:   MTLCommandBuffer_Handle, 
+    current_render_encoder:  MTLRenderCommandEncoder_Handle, // New
+    primary_window:          ^Mtl_Window_Internal,    
 	
-	allocator:       mem.Allocator
+	allocator:               mem.Allocator,
 	// Store other global objects if needed, e.g. default library.
 }
 
@@ -50,6 +54,7 @@ Mtl_Window_Internal :: struct {
 	// Or it could be a direct NSView/UIView handle if native windowing is used.
 	// For stubs, a generic view_handle.
 	view_handle:     View_Handle 
+	ns_window_handle: NSWindow_Handle, // Conceptual handle to an NSWindow for operations like setTitle
 	metal_layer:     CAMetalLayer_Handle // Attached to the view
 	
 	// Current drawable and render target texture, obtained from metal_layer per frame.

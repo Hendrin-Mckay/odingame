@@ -108,26 +108,47 @@ vk_create_shader_from_bytecode_internal :: proc(
 }
 
 // vk_destroy_shader_internal destroys a Vulkan shader module.
-vk_destroy_shader_internal :: proc(shader: gfx_interface.Gfx_Shader) {
-	vk_shader_ptr, ok_shader := shader.variant.(^Vk_Shader_Internal)
-	if !ok_shader || vk_shader_ptr == nil {
-		log.errorf("vk_destroy_shader: Invalid Gfx_Shader type or nil variant (%v).", shader.variant)
-		return
+vk_destroy_shader_internal :: proc(shader: gfx_interface.Gfx_Shader) -> common.Engine_Error {
+	if shader.variant == nil {
+		log.error("vk_destroy_shader_internal: Gfx_Shader variant is nil.")
+		return common.Engine_Error.Invalid_Handle
 	}
 
-	vk_shader_internal := vk_shader_ptr^ // Dereference to get the struct
+	vk_shader_ptr, ok_shader := shader.variant.(^Vk_Shader_Internal)
+	if !ok_shader || vk_shader_ptr == nil {
+		log.errorf("vk_destroy_shader_internal: Invalid Gfx_Shader variant type (%T) or nil pointer.", shader.variant)
+		return common.Engine_Error.Invalid_Handle
+	}
 
-	if vk_shader_internal.module != vk.NULL_HANDLE && vk_shader_internal.device_ref != nil {
-		log.infof("Destroying Vulkan Shader Module: %p (Stage: %v)", vk_shader_internal.module, vk_shader_internal.stage)
+	// It's safer to check device_ref before dereferencing vk_shader_ptr if it could be partially initialized.
+	// However, if vk_shader_ptr is valid, vk_shader_internal can be obtained.
+	vk_shader_internal := vk_shader_ptr^ 
+
+	if vk_shader_internal.device_ref == nil {
+		log.errorf("vk_destroy_shader_internal: Shader (module %p) has nil device_ref. Cannot destroy.", vk_shader_internal.module)
+		// Freeing vk_shader_ptr might still be attempted if it's considered a memory leak otherwise,
+		// but the primary issue is that the Vulkan resource cannot be cleaned up.
+		// Depending on creation guarantees, a nil device_ref might imply vk_shader_ptr itself is from a bad state.
+		// For now, we signal that the operation is invalid as it cannot proceed.
+		return common.Engine_Error.Invalid_Operation // Or Invalid_Handle if device_ref is essential for identification
+	}
+	
+	if vk_shader_internal.module != vk.NULL_HANDLE {
+		log.infof("Destroying Vulkan Shader Module: %p (Stage: %v) on device %p", 
+			vk_shader_internal.module, vk_shader_internal.stage, vk_shader_internal.device_ref.logical_device)
 		p_vk_allocator: ^vk.AllocationCallbacks = nil
 		vk.DestroyShaderModule(vk_shader_internal.device_ref.logical_device, vk_shader_internal.module, p_vk_allocator)
 	} else {
-		log.warnf("Attempted to destroy shader, but module is NULL or device_ref is nil. Module: %p", vk_shader_internal.module)
+		// This case might be acceptable if a shader object could exist without a module (e.g., failed creation earlier but struct was still made).
+		log.warnf("vk_destroy_shader_internal: Shader module is vk.NULL_HANDLE. Nothing to destroy on GPU. Device_ref: %p", vk_shader_internal.device_ref)
 	}
 	
 	// Free the Vk_Shader_Internal struct itself using its stored allocator
+	log.infof("Freeing Vk_Shader_Internal struct (allocator: %p) for module %p", vk_shader_internal.allocator, vk_shader_internal.module)
 	free(vk_shader_ptr, vk_shader_internal.allocator)
-	log.info("Vk_Shader_Internal struct freed.")
+	// log.info("Vk_Shader_Internal struct freed.") // Covered by log.infof above
+
+	return .None
 }
 
 // vk_create_shader_from_source_internal (GLSL to SPIR-V using shaderc)

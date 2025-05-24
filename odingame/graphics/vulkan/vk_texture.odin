@@ -230,27 +230,69 @@ vk_create_texture_internal :: proc(
 	return gfx_interface.Gfx_Texture{variant = vk_texture_internal}, .None
 }
 
-vk_destroy_texture_internal :: proc(gfx_device_handle: gfx_interface.Gfx_Device, texture: gfx_interface.Gfx_Texture) {
+vk_destroy_texture_internal :: proc(gfx_device_handle: gfx_interface.Gfx_Device, texture: gfx_interface.Gfx_Texture) -> common.Engine_Error {
+	if gfx_device_handle.variant == nil {
+		log.error("vk_destroy_texture_internal: Gfx_Device variant is nil.")
+		return common.Engine_Error.Invalid_Handle
+	}
+	vk_dev_internal, ok_dev := gfx_device_handle.variant.(vk_types.Vk_Device_Variant)
+	if !ok_dev || vk_dev_internal == nil {
+		log.error("vk_destroy_texture_internal: Invalid Gfx_Device variant type or nil pointer.")
+		return common.Engine_Error.Invalid_Handle
+	}
+	if vk_dev_internal.logical_device == vk.NULL_HANDLE {
+		log.error("vk_destroy_texture_internal: Logical device in Gfx_Device is nil.")
+		return common.Engine_Error.Invalid_Handle
+	}
+	logical_device := vk_dev_internal.logical_device
+	// Allocator for freeing vk_texture_internal struct should ideally come from the struct itself if stored,
+    // or fallback to device allocator if that's the convention.
+    // Vk_Texture_Internal doesn't store its own allocator, so device's allocator is used.
+	struct_allocator := vk_dev_internal.allocator
+
+
+	if texture.variant == nil {
+		log.error("vk_destroy_texture_internal: Gfx_Texture variant is nil.")
+		return common.Engine_Error.Invalid_Handle
+	}
 	tex_internal_ptr, ok_tex := texture.variant.(^vk_types.Vk_Texture_Internal)
 	if !ok_tex || tex_internal_ptr == nil {
-		log.errorf("vk_destroy_texture_internal: Invalid Gfx_Texture variant. Type: %T", texture.variant)
-		return
+		log.errorf("vk_destroy_texture_internal: Invalid Gfx_Texture variant type (%T) or nil pointer.", texture.variant)
+		return common.Engine_Error.Invalid_Handle
 	}
 	
-	if tex_internal_ptr.device_ref == nil || tex_internal_ptr.device_ref.logical_device == vk.NULL_HANDLE {
-		log.error("vk_destroy_texture_internal: Cannot destroy texture, logical device reference is nil.")
-		return
+	// Check consistency of device_ref if it exists and is used.
+	// For destruction, the passed gfx_device_handle's logical_device is authoritative.
+	if tex_internal_ptr.device_ref != vk_dev_internal {
+		log.warnf("vk_destroy_texture_internal: Texture's internal device_ref (%p) differs from passed Gfx_Device's internal ref (%p). Using passed device.",
+			tex_internal_ptr.device_ref, vk_dev_internal)
 	}
-	logical_device := tex_internal_ptr.device_ref.logical_device
-	allocator      := tex_internal_ptr.device_ref.allocator 
+
 	p_vk_allocator: ^vk.AllocationCallbacks = nil
 
-	if tex_internal_ptr.sampler != vk.NULL_HANDLE { vk.DestroySampler(logical_device, tex_internal_ptr.sampler, p_vk_allocator) }
-	if tex_internal_ptr.image_view != vk.NULL_HANDLE { vk.DestroyImageView(logical_device, tex_internal_ptr.image_view, p_vk_allocator) }
-	if tex_internal_ptr.image != vk.NULL_HANDLE { vk.DestroyImage(logical_device, tex_internal_ptr.image, p_vk_allocator) }
-	if tex_internal_ptr.memory != vk.NULL_HANDLE { vk.FreeMemory(logical_device, tex_internal_ptr.memory, p_vk_allocator) }
+	log.infof("Destroying Vulkan Texture (Image: %p, ImageView: %p, Sampler: %p, Memory: %p) on device %p",
+		tex_internal_ptr.image, tex_internal_ptr.image_view, tex_internal_ptr.sampler, tex_internal_ptr.memory, logical_device)
+
+	if tex_internal_ptr.sampler != vk.NULL_HANDLE { 
+		vk.DestroySampler(logical_device, tex_internal_ptr.sampler, p_vk_allocator) 
+		log.debugf("Destroyed Sampler: %p", tex_internal_ptr.sampler)
+	}
+	if tex_internal_ptr.image_view != vk.NULL_HANDLE { 
+		vk.DestroyImageView(logical_device, tex_internal_ptr.image_view, p_vk_allocator) 
+		log.debugf("Destroyed ImageView: %p", tex_internal_ptr.image_view)
+	}
+	if tex_internal_ptr.image != vk.NULL_HANDLE { 
+		vk.DestroyImage(logical_device, tex_internal_ptr.image, p_vk_allocator) 
+		log.debugf("Destroyed Image: %p", tex_internal_ptr.image)
+	}
+	if tex_internal_ptr.memory != vk.NULL_HANDLE { 
+		vk.FreeMemory(logical_device, tex_internal_ptr.memory, p_vk_allocator) 
+		log.debugf("Freed DeviceMemory: %p", tex_internal_ptr.memory)
+	}
 	
-	free(tex_internal_ptr, allocator)
+	log.infof("Freeing Vk_Texture_Internal struct %p (allocator: %p)", tex_internal_ptr, struct_allocator)
+	free(tex_internal_ptr, struct_allocator)
+	return .None
 }
 
 vk_update_texture_internal :: proc(
@@ -343,15 +385,25 @@ vk_update_texture_internal :: proc(
 }
 
 vk_get_texture_width_internal :: proc(texture: gfx_interface.Gfx_Texture) -> int {
+	if texture.variant == nil {
+		log.error("vk_get_texture_width_internal: Gfx_Texture variant is nil.")
+		return 0
+	}
 	if tex_internal, ok := texture.variant.(^vk_types.Vk_Texture_Internal); ok && tex_internal != nil {
 		return int(tex_internal.width)
 	}
+	log.errorf("vk_get_texture_width_internal: Invalid Gfx_Texture variant type (%T) or nil pointer.", texture.variant)
 	return 0
 }
 
 vk_get_texture_height_internal :: proc(texture: gfx_interface.Gfx_Texture) -> int {
+	if texture.variant == nil {
+		log.error("vk_get_texture_height_internal: Gfx_Texture variant is nil.")
+		return 0
+	}
 	if tex_internal, ok := texture.variant.(^vk_types.Vk_Texture_Internal); ok && tex_internal != nil {
 		return int(tex_internal.height)
 	}
+	log.errorf("vk_get_texture_height_internal: Invalid Gfx_Texture variant type (%T) or nil pointer.", texture.variant)
 	return 0
 }

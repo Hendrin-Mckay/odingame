@@ -282,34 +282,77 @@ vk_create_pipeline_internal :: proc(
 	return gfx_interface.Gfx_Pipeline{variant = vk_pipeline_internal}, .None
 }
 
-vk_destroy_pipeline_internal :: proc(pipeline_handle: gfx_interface.Gfx_Pipeline) {
+vk_destroy_pipeline_internal :: proc(pipeline_handle: gfx_interface.Gfx_Pipeline) -> common.Engine_Error {
+	if pipeline_handle.variant == nil {
+		log.error("vk_destroy_pipeline_internal: Gfx_Pipeline variant is nil.")
+		return common.Engine_Error.Invalid_Handle
+	}
+
 	vk_pipe_ptr, ok_pipe := pipeline_handle.variant.(^vk_types.Vk_Pipeline_Internal)
 	if !ok_pipe || vk_pipe_ptr == nil {
-		log.errorf("vk_destroy_pipeline: Invalid Gfx_Pipeline type or nil variant (%v).", pipeline_handle.variant)
-		return
+		log.errorf("vk_destroy_pipeline_internal: Invalid Gfx_Pipeline variant type (%T) or nil pointer.", pipeline_handle.variant)
+		return common.Engine_Error.Invalid_Handle
 	}
 
+	if vk_pipe_ptr.device_ref == nil {
+		log.errorf("vk_destroy_pipeline_internal: Pipeline (handle %p) has nil device_ref.", vk_pipe_ptr.pipeline)
+		// Cannot proceed with Vulkan cleanup without device. Freeing struct memory is still important.
+		free(vk_pipe_ptr, vk_pipe_ptr.allocator) 
+		log.warn("Vk_Pipeline_Internal struct freed, but Vulkan resources may remain due to nil device_ref.")
+		return common.Engine_Error.Invalid_Handle 
+	}
 	logical_device := vk_pipe_ptr.device_ref.logical_device
-	p_vk_allocator: ^vk.AllocationCallbacks = nil
-
-	if vk_pipe_ptr.pipeline != vk.NULL_HANDLE {
-		vk.DestroyPipeline(logical_device, vk_pipe_ptr.pipeline, p_vk_allocator)
-	}
-    // Destroy descriptor set layouts owned by this pipeline
-    if vk_pipe_ptr.descriptor_set_layouts != nil {
-        for layout in vk_pipe_ptr.descriptor_set_layouts {
-            if layout != vk.NULL_HANDLE {
-                // vk.DestroyDescriptorSetLayout(logical_device, layout, p_vk_allocator)
-                // This should be called by vk_destroy_descriptor_set_layout_internal
-                vk_destroy_descriptor_set_layout_internal(vk_pipe_ptr.device_ref, layout)
-            }
-        }
-        delete(vk_pipe_ptr.descriptor_set_layouts) // Free the slice itself
-    }
-	if vk_pipe_ptr.pipeline_layout != vk.NULL_HANDLE {
-		vk.DestroyPipelineLayout(logical_device, vk_pipe_ptr.pipeline_layout, p_vk_allocator)
+	if logical_device == vk.NULL_HANDLE {
+		log.errorf("vk_destroy_pipeline_internal: Pipeline (handle %p) has nil logical_device in device_ref.", vk_pipe_ptr.pipeline)
+		free(vk_pipe_ptr, vk_pipe_ptr.allocator)
+		log.warn("Vk_Pipeline_Internal struct freed, but Vulkan resources may remain due to nil logical_device.")
+		return common.Engine_Error.Invalid_Handle
 	}
 	
+	p_vk_allocator: ^vk.AllocationCallbacks = nil
+	overall_error: common.Engine_Error = .None
+
+	// Destroy actual Vulkan pipeline
+	if vk_pipe_ptr.pipeline != vk.NULL_HANDLE {
+		log.infof("Destroying Vulkan Pipeline: %p on device %p", vk_pipe_ptr.pipeline, logical_device)
+		vk.DestroyPipeline(logical_device, vk_pipe_ptr.pipeline, p_vk_allocator)
+	} else {
+		log.warn("vk_destroy_pipeline_internal: pipeline field in Vk_Pipeline_Internal is vk.NULL_HANDLE.")
+	}
+
+    // Destroy descriptor set layouts owned by this pipeline
+    if vk_pipe_ptr.descriptor_set_layouts != nil {
+        log.infof("Destroying %d descriptor set layout(s) for pipeline %p.", len(vk_pipe_ptr.descriptor_set_layouts), vk_pipe_ptr.pipeline)
+        for i, layout in vk_pipe_ptr.descriptor_set_layouts {
+            // vk_destroy_descriptor_set_layout_internal handles nil layout gracefully.
+            err := vk_destroy_descriptor_set_layout_internal(vk_pipe_ptr.device_ref, layout)
+            if err != .None {
+                log.errorf("vk_destroy_pipeline_internal: Failed to destroy descriptor_set_layout[%d] (%p) for pipeline %p: %v. Continuing cleanup.", 
+                    i, layout, vk_pipe_ptr.pipeline, err)
+                if overall_error == .None { overall_error = err } // Capture first error
+            }
+        }
+        // Free the slice structure itself after destroying its contents.
+        // This assumes the slice was allocated by this pipeline's allocator.
+        // If it was pointing to layouts owned elsewhere or a fixed array, this delete might be wrong.
+        // Given it's `make`d in create_pipeline, deleting is likely correct.
+        log.infof("Deleting descriptor_set_layouts slice for pipeline %p.", vk_pipe_ptr.pipeline)
+        delete(vk_pipe_ptr.descriptor_set_layouts, vk_pipe_ptr.allocator) 
+    } else {
+        log.info("vk_destroy_pipeline_internal: No descriptor_set_layouts slice to destroy.")
+    }
+
+	// Destroy pipeline layout
+	if vk_pipe_ptr.pipeline_layout != vk.NULL_HANDLE {
+		log.infof("Destroying Vulkan PipelineLayout: %p on device %p", vk_pipe_ptr.pipeline_layout, logical_device)
+		vk.DestroyPipelineLayout(logical_device, vk_pipe_ptr.pipeline_layout, p_vk_allocator)
+	} else {
+		log.warn("vk_destroy_pipeline_internal: pipeline_layout field in Vk_Pipeline_Internal is vk.NULL_HANDLE.")
+	}
+	
+	log.infof("Freeing Vk_Pipeline_Internal struct (allocator: %p) for pipeline %p", vk_pipe_ptr.allocator, vk_pipe_ptr.pipeline)
 	free(vk_pipe_ptr, vk_pipe_ptr.allocator)
-	log.info("Vk_Pipeline_Internal struct and associated resources freed.")
+	// log.info("Vk_Pipeline_Internal struct and associated resources freed.") // Covered by infof
+
+	return overall_error
 }

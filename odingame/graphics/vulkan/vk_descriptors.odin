@@ -50,9 +50,25 @@ vk_create_descriptor_set_layout_internal :: proc(
 	return descriptor_set_layout, .None
 }
 
-vk_destroy_descriptor_set_layout_internal :: proc( device_internal: ^vk_types.Vk_Device_Internal, layout: vk.DescriptorSetLayout,) {
-    if device_internal == nil || device_internal.logical_device == vk.NULL_HANDLE || layout == vk.NULL_HANDLE { return }
-    vk.DestroyDescriptorSetLayout(device_internal.logical_device, layout, nil)
+vk_destroy_descriptor_set_layout_internal :: proc( device_internal: ^vk_types.Vk_Device_Internal, layout: vk.DescriptorSetLayout) -> common.Engine_Error {
+    if device_internal == nil {
+        log.error("vk_destroy_descriptor_set_layout_internal: device_internal is nil.")
+        return common.Engine_Error.Invalid_Handle
+    }
+    if device_internal.logical_device == vk.NULL_HANDLE {
+        log.error("vk_destroy_descriptor_set_layout_internal: device_internal.logical_device is nil.")
+        return common.Engine_Error.Invalid_Handle
+    }
+    if layout == vk.NULL_HANDLE {
+        // Not an error to try to destroy a NULL handle, just a no-op.
+        // log.info("vk_destroy_descriptor_set_layout_internal: layout is vk.NULL_HANDLE. Nothing to destroy.")
+        return common.Engine_Error.None 
+    }
+    
+    log.infof("Destroying Vulkan DescriptorSetLayout: %p on device %p", layout, device_internal.logical_device)
+    p_vk_allocator: ^vk.AllocationCallbacks = nil
+    vk.DestroyDescriptorSetLayout(device_internal.logical_device, layout, p_vk_allocator)
+    return common.Engine_Error.None
 }
 
 vk_create_descriptor_pool_internal :: proc(
@@ -247,5 +263,187 @@ vk_bind_texture_to_unit_internal :: proc(
 
     vk_update_descriptor_set_texture_internal(vk_dev_internal, current_descriptor_set, binding_for_texture, texture_internal_ptr)
 
+    return .None
+}
+
+// --- Additional uniform setting internal functions ---
+
+vk_set_uniform_vec2_internal :: proc(
+    gfx_device_handle: gfx_interface.Gfx_Device, 
+    binding_for_ubo: u32, 
+    val: [2]f32,
+) -> common.Engine_Error {
+    vk_dev_internal, ok_dev := gfx_device_handle.variant.(^vk_types.Vk_Device_Internal)
+    if !ok_dev || vk_dev_internal == nil { return common.Engine_Error.Invalid_Handle }
+
+    current_window_internal := vk_dev_internal.primary_window_for_pipeline
+    if current_window_internal == nil {
+        log.error("vk_set_uniform_vec2_internal: No primary window set on device.")
+        return common.Engine_Error.Invalid_Operation
+    }
+    frame_idx := current_window_internal.current_frame_index
+    ubo_info := &vk_dev_internal.uniform_buffers[frame_idx]
+
+    if ubo_info.buffer == vk.NULL_HANDLE || ubo_info.mapped_ptr == nil {
+        log.errorf("vk_set_uniform_vec2_internal: Frame %d UBO is invalid or not mapped.", frame_idx)
+        return common.Engine_Error.Invalid_Handle
+    }
+    if ubo_info.size < size_of([2]f32) {
+        log.errorf("vk_set_uniform_vec2_internal: UBO size (%d) is too small for vec2 (%d).", 
+            ubo_info.size, size_of([2]f32))
+        return common.Engine_Error.Invalid_Parameter
+    }
+    mem.copy(ubo_info.mapped_ptr, &val[0], size_of([2]f32))
+
+    current_descriptor_set := current_window_internal.current_descriptor_sets[frame_idx]
+    if current_descriptor_set == vk.NULL_HANDLE {
+        log.errorf("vk_set_uniform_vec2_internal: Frame %d has no valid descriptor set.", frame_idx)
+        return common.Engine_Error.Invalid_Operation
+    }
+    vk_update_descriptor_set_uniform_buffer_internal(vk_dev_internal, current_descriptor_set, binding_for_ubo, ubo_info)
+    return .None
+}
+
+vk_set_uniform_vec3_internal :: proc(
+    gfx_device_handle: gfx_interface.Gfx_Device, 
+    binding_for_ubo: u32, 
+    val: [3]f32,
+) -> common.Engine_Error {
+    vk_dev_internal, ok_dev := gfx_device_handle.variant.(^vk_types.Vk_Device_Internal)
+    if !ok_dev || vk_dev_internal == nil { return common.Engine_Error.Invalid_Handle }
+
+    current_window_internal := vk_dev_internal.primary_window_for_pipeline
+    if current_window_internal == nil {
+        log.error("vk_set_uniform_vec3_internal: No primary window set on device.")
+        return common.Engine_Error.Invalid_Operation
+    }
+    frame_idx := current_window_internal.current_frame_index
+    ubo_info := &vk_dev_internal.uniform_buffers[frame_idx]
+
+    if ubo_info.buffer == vk.NULL_HANDLE || ubo_info.mapped_ptr == nil {
+        log.errorf("vk_set_uniform_vec3_internal: Frame %d UBO is invalid or not mapped.", frame_idx)
+        return common.Engine_Error.Invalid_Handle
+    }
+    if ubo_info.size < size_of([3]f32) {
+        log.errorf("vk_set_uniform_vec3_internal: UBO size (%d) is too small for vec3 (%d).", 
+            ubo_info.size, size_of([3]f32))
+        return common.Engine_Error.Invalid_Parameter
+    }
+    mem.copy(ubo_info.mapped_ptr, &val[0], size_of([3]f32))
+
+    current_descriptor_set := current_window_internal.current_descriptor_sets[frame_idx]
+    if current_descriptor_set == vk.NULL_HANDLE {
+        log.errorf("vk_set_uniform_vec3_internal: Frame %d has no valid descriptor set.", frame_idx)
+        return common.Engine_Error.Invalid_Operation
+    }
+    vk_update_descriptor_set_uniform_buffer_internal(vk_dev_internal, current_descriptor_set, binding_for_ubo, ubo_info)
+    return .None
+}
+
+vk_set_uniform_vec4_internal :: proc(
+    gfx_device_handle: gfx_interface.Gfx_Device, 
+    binding_for_ubo: u32, 
+    val: [4]f32,
+) -> common.Engine_Error {
+    vk_dev_internal, ok_dev := gfx_device_handle.variant.(^vk_types.Vk_Device_Internal)
+    if !ok_dev || vk_dev_internal == nil { return common.Engine_Error.Invalid_Handle }
+
+    current_window_internal := vk_dev_internal.primary_window_for_pipeline
+    if current_window_internal == nil {
+        log.error("vk_set_uniform_vec4_internal: No primary window set on device.")
+        return common.Engine_Error.Invalid_Operation
+    }
+    frame_idx := current_window_internal.current_frame_index
+    ubo_info := &vk_dev_internal.uniform_buffers[frame_idx]
+
+    if ubo_info.buffer == vk.NULL_HANDLE || ubo_info.mapped_ptr == nil {
+        log.errorf("vk_set_uniform_vec4_internal: Frame %d UBO is invalid or not mapped.", frame_idx)
+        return common.Engine_Error.Invalid_Handle
+    }
+    if ubo_info.size < size_of([4]f32) {
+        log.errorf("vk_set_uniform_vec4_internal: UBO size (%d) is too small for vec4 (%d).", 
+            ubo_info.size, size_of([4]f32))
+        return common.Engine_Error.Invalid_Parameter
+    }
+    mem.copy(ubo_info.mapped_ptr, &val[0], size_of([4]f32))
+
+    current_descriptor_set := current_window_internal.current_descriptor_sets[frame_idx]
+    if current_descriptor_set == vk.NULL_HANDLE {
+        log.errorf("vk_set_uniform_vec4_internal: Frame %d has no valid descriptor set.", frame_idx)
+        return common.Engine_Error.Invalid_Operation
+    }
+    vk_update_descriptor_set_uniform_buffer_internal(vk_dev_internal, current_descriptor_set, binding_for_ubo, ubo_info)
+    return .None
+}
+
+vk_set_uniform_int_internal :: proc(
+    gfx_device_handle: gfx_interface.Gfx_Device, 
+    binding_for_ubo: u32, 
+    val: i32,
+) -> common.Engine_Error {
+    vk_dev_internal, ok_dev := gfx_device_handle.variant.(^vk_types.Vk_Device_Internal)
+    if !ok_dev || vk_dev_internal == nil { return common.Engine_Error.Invalid_Handle }
+
+    current_window_internal := vk_dev_internal.primary_window_for_pipeline
+    if current_window_internal == nil {
+        log.error("vk_set_uniform_int_internal: No primary window set on device.")
+        return common.Engine_Error.Invalid_Operation
+    }
+    frame_idx := current_window_internal.current_frame_index
+    ubo_info := &vk_dev_internal.uniform_buffers[frame_idx]
+
+    if ubo_info.buffer == vk.NULL_HANDLE || ubo_info.mapped_ptr == nil {
+        log.errorf("vk_set_uniform_int_internal: Frame %d UBO is invalid or not mapped.", frame_idx)
+        return common.Engine_Error.Invalid_Handle
+    }
+    if ubo_info.size < size_of(i32) {
+        log.errorf("vk_set_uniform_int_internal: UBO size (%d) is too small for int (%d).", 
+            ubo_info.size, size_of(i32))
+        return common.Engine_Error.Invalid_Parameter
+    }
+    mem.copy(ubo_info.mapped_ptr, &val, size_of(i32)) // For single values, pass address directly
+
+    current_descriptor_set := current_window_internal.current_descriptor_sets[frame_idx]
+    if current_descriptor_set == vk.NULL_HANDLE {
+        log.errorf("vk_set_uniform_int_internal: Frame %d has no valid descriptor set.", frame_idx)
+        return common.Engine_Error.Invalid_Operation
+    }
+    vk_update_descriptor_set_uniform_buffer_internal(vk_dev_internal, current_descriptor_set, binding_for_ubo, ubo_info)
+    return .None
+}
+
+vk_set_uniform_float_internal :: proc(
+    gfx_device_handle: gfx_interface.Gfx_Device, 
+    binding_for_ubo: u32, 
+    val: f32,
+) -> common.Engine_Error {
+    vk_dev_internal, ok_dev := gfx_device_handle.variant.(^vk_types.Vk_Device_Internal)
+    if !ok_dev || vk_dev_internal == nil { return common.Engine_Error.Invalid_Handle }
+
+    current_window_internal := vk_dev_internal.primary_window_for_pipeline
+    if current_window_internal == nil {
+        log.error("vk_set_uniform_float_internal: No primary window set on device.")
+        return common.Engine_Error.Invalid_Operation
+    }
+    frame_idx := current_window_internal.current_frame_index
+    ubo_info := &vk_dev_internal.uniform_buffers[frame_idx]
+
+    if ubo_info.buffer == vk.NULL_HANDLE || ubo_info.mapped_ptr == nil {
+        log.errorf("vk_set_uniform_float_internal: Frame %d UBO is invalid or not mapped.", frame_idx)
+        return common.Engine_Error.Invalid_Handle
+    }
+    if ubo_info.size < size_of(f32) {
+        log.errorf("vk_set_uniform_float_internal: UBO size (%d) is too small for float (%d).", 
+            ubo_info.size, size_of(f32))
+        return common.Engine_Error.Invalid_Parameter
+    }
+    mem.copy(ubo_info.mapped_ptr, &val, size_of(f32)) // For single values, pass address directly
+
+    current_descriptor_set := current_window_internal.current_descriptor_sets[frame_idx]
+    if current_descriptor_set == vk.NULL_HANDLE {
+        log.errorf("vk_set_uniform_float_internal: Frame %d has no valid descriptor set.", frame_idx)
+        return common.Engine_Error.Invalid_Operation
+    }
+    vk_update_descriptor_set_uniform_buffer_internal(vk_dev_internal, current_descriptor_set, binding_for_ubo, ubo_info)
     return .None
 }

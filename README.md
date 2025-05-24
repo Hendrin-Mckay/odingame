@@ -28,7 +28,7 @@ A modern, cross-platform game development framework for the [Odin Programming La
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/odingame.git
+   git clone https://github.com/Hendrin-Mckay/odingame.git
    ```
 
 2. Build the example:

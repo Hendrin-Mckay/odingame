@@ -81,52 +81,59 @@ Mtl_Shader_Internal :: struct {
 	allocator:       mem.Allocator,
 }
 
-// Mtl_Pipeline_Internal: For Metal, this is primarily the MTLRenderPipelineState.
-Mtl_Pipeline_Internal :: struct {
-	pipeline_state:      MTLRenderPipelineState_Handle
-	depth_stencil_state: MTLDepthStencilState_Handle // Optional
-	// Vertex descriptor might be part of pipeline state or set separately.
-	// Other states like cull mode, winding order are part of MTLRenderPipelineDescriptor.
+// MTL_Pipeline_Internal: For Metal, this is primarily the MTLRenderPipelineState.
+MTL_Pipeline_Internal :: struct { // Renamed for consistency
+	pipeline_state:      MTLRenderPipelineState_Handle  // The baked PSO
+	vertex_function:     MTLFunction_Handle           // Reference to the vertex function used (not owned)
+	fragment_function:   MTLFunction_Handle         // Reference to the fragment function used (not owned)
+    vertex_descriptor:   MTLVertexDescriptor_Handle   // Optional: if a custom VD was created and set (owned by pipeline)
+	depth_stencil_state: MTLDepthStencilState_Handle  // Optional: if a custom DSS was created and set (owned by pipeline)
+                                                    // Rasterizer state (cull, fill) is part of PSO.
+                                                    // Blend state (for color attachments) is part of PSO.
+	primitive_topology:  MTLPrimitiveType           // The topology this PSO was compiled for (from descriptor)
 	allocator:           mem.Allocator,
 }
 
 // Mtl_Buffer_Internal: For MTLBuffer objects.
-Mtl_Buffer_Internal :: struct {
-	buffer_handle:   MTLBuffer_Handle
-	size_in_bytes:   int
-	type:            gfx_interface.Buffer_Type
-	// storage_mode: MTLStorageMode (shared, private, managed)
-	dynamic:         bool 
+MTL_Buffer_Internal :: struct { // Renamed for consistency from Mtl_ to MTL_
+	buffer:          MTLBuffer_Handle // Renamed from buffer_handle for consistency
+	size:            int              // Renamed from size_in_bytes
+	options:         MTLResourceOptions // Store the actual Metal resource options used
 	allocator:       mem.Allocator,
+	// type:            gfx_interface.Buffer_Type, // Engine-level type can be stored if needed for logic, but options are key for Metal
+	// dynamic:         bool, // Superseded by options like StorageModeShared/Managed
 }
 
-// Mtl_Texture_Internal: For MTLTexture objects.
-Mtl_Texture_Internal :: struct {
-	texture_handle:  MTLTexture_Handle
+// MTL_Texture_Internal: For MTLTexture objects.
+MTL_Texture_Internal :: struct { // Renamed for consistency
+	texture:         MTLTexture_Handle      // Renamed from texture_handle
+    texture_type:    MTLTextureType         // Added
+    pixel_format:    MTLPixelFormat         // Added (actual Metal format)
 	width:           int
 	height:          int
-	format:          gfx_interface.Texture_Format // Or an MTLPixelFormat
-	// texture_type: MTLTextureType (e.g., .Type2D)
-	// usage: MTLTextureUsage
+    depth:           int                    // Added (for 3D textures or array layers if Type1D/2DArray)
+    mipmap_levels:   int                    // Added
+    array_length:    int                    // Added
+    usage:           MTLTextureUsage        // Added
+    storage_mode:    MTLStorageMode         // Added
 	allocator:       mem.Allocator,
+    // format:          gfx_interface.Texture_Format // Store original engine format if needed for mapping back
 }
 
 // Mtl_Vertex_Array_Internal: In Metal, this corresponds to a MTLVertexDescriptor,
 // which describes the layout of vertex data and how it maps to vertex shader inputs.
 // It's used when creating a MTLRenderPipelineState.
-Mtl_Vertex_Array_Internal :: struct {
-	vertex_descriptor: MTLVertexDescriptor_Handle
-	// This might also store information about which buffers are bound to which attribute table entries,
-	// though that's often set at draw call time with setVertexBuffer:offset:atIndex:.
+MTL_Vertex_Array_Internal :: struct { // Renamed for consistency
+	vertex_descriptor: MTLVertexDescriptor_Handle 
 	allocator:         mem.Allocator,
 }
 
 
 // --- Gfx_Device and Gfx_Window variants for Metal ---
-Mtl_Device_Variant        :: ^Mtl_Device_Internal
-Mtl_Window_Variant        :: ^Mtl_Window_Internal
-Mtl_Shader_Variant        :: ^Mtl_Shader_Internal
-Mtl_Pipeline_Variant      :: ^Mtl_Pipeline_Internal
-Mtl_Buffer_Variant        :: ^Mtl_Buffer_Internal
-Mtl_Texture_Variant       :: ^Mtl_Texture_Internal
-Mtl_Vertex_Array_Variant  :: ^Mtl_Vertex_Array_Internal
+MTL_Device_Variant        :: ^MTL_Device_Internal 
+MTL_Window_Variant        :: ^MTL_Window_Internal 
+MTL_Shader_Variant        :: ^MTL_Shader_Internal 
+MTL_Pipeline_Variant      :: ^MTL_Pipeline_Internal 
+MTL_Buffer_Variant        :: ^MTL_Buffer_Internal 
+MTL_Texture_Variant       :: ^MTL_Texture_Internal 
+MTL_Vertex_Array_Variant  :: ^MTL_Vertex_Array_Internal

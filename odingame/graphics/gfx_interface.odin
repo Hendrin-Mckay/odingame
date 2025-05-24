@@ -22,6 +22,17 @@ Texture_Format :: enum {
 	Depth24_Stencil8,
 }
 
+Texture_Type :: enum { // Added
+    Tex1D,
+    Tex1D_Array,
+    Tex2D,
+    Tex2D_Array,
+    Tex2D_Multisample, // Not fully supported by create_texture yet
+    TexCube,
+    TexCube_Array,
+    Tex3D,
+}
+
 Texture_Usage :: enum_flags {
 	Sampled,
 	Storage,
@@ -122,8 +133,26 @@ Gfx_Framebuffer :: struct {
 }
 
 Gfx_Render_Pass :: struct {
-	variant: rawptr // Will hold the backend-specific render pass pointer
+	variant: rawptr // Will hold the backend-specific render pass object (e.g. for Vulkan)
 }
+
+// Gfx_Frame_Context_Info holds transient, per-frame data needed by various rendering commands,
+// especially for backends like Metal that use specific per-frame objects like drawables and command buffers.
+Gfx_Frame_Context_Info :: struct {
+    // Metal specific (rawptr to Metal handles)
+    mtl_current_drawable: rawptr, 
+    mtl_command_buffer:   rawptr,
+    mtl_main_render_pass_descriptor: rawptr, // Descriptor for the main pass (to screen drawable)
+    
+    // Vulkan specific (conceptual)
+    // vk_current_frame_index: u32,
+    // vk_current_command_buffer: rawptr, 
+    // vk_current_image_index: u32, // For swapchain image
+
+    // Other backend specific data can be added here, possibly in a union if mutually exclusive.
+    // For now, Metal fields are direct.
+}
+
 
 // Vertex attribute and buffer layout definitions
 // Describes a single vertex attribute.
@@ -135,11 +164,16 @@ Vertex_Attribute :: struct {
 }
 
 // Describes the layout of data in a single vertex buffer.
+Vertex_Step_Rate :: enum {
+    Per_Vertex,
+    Per_Instance,
+}
+
 Vertex_Buffer_Layout :: struct {
 	binding:          u32,     // The binding point for this buffer (e.g., for glBindVertexBuffer)
 	stride_in_bytes:  u32,     // Stride of the vertex data in this buffer.
 	attributes:       []Vertex_Attribute, // Attributes sourced from this buffer.
-	// step_rate:     Input_Step_Rate, // TODO: For instancing (.Vertex or .Instance)
+	step_rate:        Vertex_Step_Rate, // Added for instancing
 }
 
 Vertex_Format :: enum {
@@ -158,16 +192,102 @@ Gfx_Vertex_Array :: struct_variant { // e.g. opengl: ^Gl_Vertex_Array
 // Gfx_Device_Interface defines the graphics API interface that all backends must implement
 // This allows the engine to work with multiple graphics APIs (OpenGL, Vulkan, DirectX, Metal)
 // while providing a consistent interface to the rest of the codebase
+
+// Gfx_Pipeline_Blend_State_Desc describes blending for a single render target.
+Gfx_Pipeline_Blend_State_Desc :: struct {
+    blend_enable:      bool,
+    src_factor_rgb:    Blend_Factor, // Renamed from Blend_Mode
+    dst_factor_rgb:    Blend_Factor,
+    op_rgb:            Blend_Op,     // Renamed from Blend_Mode
+    src_factor_alpha:  Blend_Factor,
+    dst_factor_alpha:  Blend_Factor,
+    op_alpha:          Blend_Op,
+    color_write_mask:  Color_Write_Mask_Flags, // New enum for R,G,B,A flags
+}
+
+// Gfx_Pipeline_Depth_Stencil_State_Desc describes depth and stencil testing.
+Gfx_Stencil_Op_Desc :: struct {
+    fail_op:       Stencil_Op,
+    depth_fail_op: Stencil_Op,
+    pass_op:       Stencil_Op,
+    compare_op:    Comparison_Func,
+}
+
+Gfx_Pipeline_Depth_Stencil_State_Desc :: struct {
+    depth_test_enable:  bool,
+    depth_write_enable: bool,
+    depth_compare_op:   Comparison_Func, 
+    stencil_enable:     bool,
+    stencil_read_mask:  u8,
+    stencil_write_mask: u8,
+    front_face_stencil: Gfx_Stencil_Op_Desc, 
+    back_face_stencil:  Gfx_Stencil_Op_Desc,
+}
+
+// Gfx_Pipeline_Rasterizer_State_Desc describes rasterization behavior.
+Gfx_Pipeline_Rasterizer_State_Desc :: struct {
+    fill_mode:          Fill_Mode, // New enum: Solid, Wireframe
+    cull_mode:          Cull_Mode,
+    front_face_winding: Winding_Order, // New enum: Clockwise, CounterClockwise
+    depth_bias:         i32, // Or f32 depending on API needs
+    depth_bias_clamp:   f32,
+    slope_scaled_depth_bias: f32,
+    depth_clip_enable:  bool,
+    scissor_enable:     bool,
+    // multisample_enable: bool, // Usually tied to render target
+    // antialiased_line_enable: bool,
+}
+
+
+// Gfx_Pipeline_Desc describes the full state of a graphics pipeline.
+Gfx_Pipeline_Desc :: struct {
+    vertex_shader:   Gfx_Shader,
+    pixel_shader:    Gfx_Shader, // Or fragment_shader
+    // geometry_shader: Maybe(Gfx_Shader),
+    // hull_shader:     Maybe(Gfx_Shader),
+    // domain_shader:   Maybe(Gfx_Shader),
+    vertex_layout:   Gfx_Vertex_Layout_Desc, // New encompassing struct for vertex layout
+    primitive_topology: Primitive_Topology,
+    
+    blend_state: Gfx_Pipeline_Blend_State_Desc, // Single blend state for RT0 for now
+    // For multiple render targets (MRT), blend_states would be a slice.
+    
+    depth_stencil_state: Gfx_Pipeline_Depth_Stencil_State_Desc,
+    rasterizer_state: Gfx_Pipeline_Rasterizer_State_Desc,
+    
+    label: string, // Optional debug label for the pipeline
+}
+
+// Gfx_Vertex_Layout_Desc describes the complete vertex input layout.
+Gfx_Vertex_Layout_Desc :: struct {
+    attributes: []Vertex_Attribute, // Overall list of attributes
+    buffers:    []Vertex_Buffer_Layout_Desc, // Description for each vertex buffer binding
+}
+// Vertex_Buffer_Layout_Desc describes a single vertex buffer binding.
+Vertex_Buffer_Layout_Desc :: struct {
+    binding: u32, // Corresponds to Vertex_Attribute.buffer_binding
+    stride_in_bytes: u32,
+    step_rate: Vertex_Step_Rate,
+}
+
+
+// New enums needed for Gfx_Pipeline_Desc
+Blend_Factor :: enum { Zero, One, Src_Color, Inv_Src_Color, Src_Alpha, Inv_Src_Alpha, Dest_Alpha, Inv_Dest_Alpha, Dest_Color, Inv_Dest_Color, Src_Alpha_Sat, Blend_Factor_Color, Inv_Blend_Factor_Color }
+Blend_Op :: enum { Add, Subtract, Rev_Subtract, Min, Max }
+Color_Write_Mask_Flags :: enum_flags { R = 1, G = 2, B = 4, A = 8, All = (R|G|B|A) }
+Comparison_Func :: enum { Never, Less, Equal, Less_Equal, Greater, Not_Equal, Greater_Equal, Always } 
+Stencil_Op :: enum { Keep, Zero, Replace, Incr_Sat, Decr_Sat, Invert, Incr, Decr } // Added
+Fill_Mode :: enum { Solid, Wireframe }
+Winding_Order :: enum { Clockwise, CounterClockwise }
+
+
 Gfx_Device_Interface :: struct {
 	// Device Management
-	// Creates a graphics device using the provided allocator
 	create_device: proc(allocator: ^rawptr) -> (Gfx_Device, common.Engine_Error),
-	// Destroys a graphics device and frees associated resources
 	destroy_device: proc(device: Gfx_Device),
 
 	// Window/Swapchain Management
-	// Creates a window associated with the given device
-	create_window: proc(device: Gfx_Device, title: string, width, height: int) -> (Gfx_Window, common.Engine_Error),
+    create_window: proc(device: Gfx_Device, title: string, width, height: int, vsync: bool, sdl_window_rawptr: rawptr) -> (Gfx_Window, common.Engine_Error),
 	// Destroys a window and frees associated resources
 	destroy_window: proc(window: Gfx_Window),
 	// Presents the current frame to the window (swap buffers)
@@ -198,40 +318,78 @@ Gfx_Device_Interface :: struct {
     map_buffer: proc(buffer: Gfx_Buffer, offset, size: int) -> rawptr,
     unmap_buffer: proc(buffer: Gfx_Buffer),
 
-
 	// Texture Management
-	create_texture: proc(device: Gfx_Device, width, height: int, format: Texture_Format, usage: Texture_Usage, data: rawptr = nil) -> (Gfx_Texture, common.Engine_Error),
-	update_texture: proc(texture: Gfx_Texture, x, y, width, height: int, data: rawptr) -> common.Engine_Error,
-	destroy_texture: proc(texture: Gfx_Texture),
-	bind_texture_to_unit: proc(device: Gfx_Device, texture: Gfx_Texture, unit: int),
+    create_texture: proc(
+        device: Gfx_Device, 
+        width: int, height: int, depth: int, // Added depth
+        format: Texture_Format, 
+        type: Texture_Type,                 // Added type
+        usage: Texture_Usage_Flags, 
+        mip_levels: int,                    // Added mip_levels
+        array_length: int,                  // Added array_length
+        data: rawptr = nil, 
+        data_pitch: int = 0,                // Added data_pitch
+        data_slice_pitch: int = 0,          // Added data_slice_pitch
+        label: string = "",                 // Added label (was already there in some backend impls)
+    ) -> (Gfx_Texture, common.Engine_Error),
+	update_texture: proc(
+        device: Gfx_Device, // Added device context for consistency, though Metal might use encoder from elsewhere
+        texture: Gfx_Texture, 
+        level: int,                         // Added level
+        x: int, y: int, z: int,             // Added z offset
+        width: int, height: int, depth_dim: int, // Added depth_dim for region
+        data: rawptr, 
+        data_pitch: int, 
+        data_slice_pitch: int,              // Added data_slice_pitch
+    ) -> common.Engine_Error,
+	destroy_texture: proc(texture: Gfx_Texture) -> common.Engine_Error, // Changed to return error
+	// bind_texture_to_unit: proc(device: Gfx_Device, texture: Gfx_Texture, unit: int), // Old signature
 	get_texture_width: proc(texture: Gfx_Texture) -> int,
 	get_texture_height: proc(texture: Gfx_Texture) -> int,
 
-	// Drawing Commands
-	begin_frame: proc(device: Gfx_Device), // Signifies start of a new frame
-	end_frame: proc(device: Gfx_Device),   // Signifies end of a frame, may trigger command buffer submission
+	// Drawing Commands & Frame Lifecycle
+    // begin_frame now returns a context info struct which may contain frame-specific handles (e.g. Metal drawable, command buffer)
+	begin_frame: proc(device: Gfx_Device, window: Gfx_Window) -> (common.Engine_Error, ^Gfx_Frame_Context_Info), 
+	clear_screen: proc(device: Gfx_Device, frame_ctx: ^Gfx_Frame_Context_Info, options: Clear_Options), // Uses frame_ctx for Metal RPD
+    
+    // begin_render_pass now takes frame_ctx (for descriptor) and returns an encoder_handle (rawptr to backend encoder)
+	begin_render_pass: proc(device: Gfx_Device, frame_ctx: ^Gfx_Frame_Context_Info /*, pass_desc: Render_Pass_Desc (target,etc)*/) -> rawptr, 
+	end_render_pass: proc(encoder_handle: rawptr), // Takes encoder from begin_render_pass
 
-	clear_screen: proc(device: Gfx_Device, options: Clear_Options),
-    set_viewport: proc(device: Gfx_Device, viewport: Viewport),
-    set_scissor: proc(device: Gfx_Device, scissor: Scissor),
-    disable_scissor: proc(device: Gfx_Device),
-	set_pipeline: proc(device: Gfx_Device, pipeline: Gfx_Pipeline),
-	set_vertex_buffer: proc(device: Gfx_Device, buffer: Gfx_Buffer, binding_index: u32 = 0, offset: u32 = 0),
-	set_index_buffer: proc(device: Gfx_Device, buffer: Gfx_Buffer, offset: u32 = 0), // Assuming u16 or u32 indices based on buffer creation or a global setting
-    // TODO: set_uniform_buffer, set_textures (need to define descriptor sets / binding points)
-	draw: proc(device: Gfx_Device, vertex_count, instance_count, first_vertex, first_instance: u32),
-	draw_indexed: proc(device: Gfx_Device, index_count, instance_count, first_index, base_vertex, first_instance: u32),
+    // Drawing commands now take an encoder_handle
+	draw: proc(encoder_handle: rawptr, device: Gfx_Device, vertex_count, instance_count, first_vertex, first_instance: u32),
+	draw_indexed: proc(encoder_handle: rawptr, device: Gfx_Device, index_count, instance_count, first_index, base_vertex, first_instance: u32),
+    
+    // end_frame now takes frame_ctx for presentation (Metal needs drawable & command buffer)
+	end_frame: proc(device: Gfx_Device, window: Gfx_Window, frame_ctx: ^Gfx_Frame_Context_Info),   
 
-	// Framebuffer Management
+    // Other state settings (can be on device or encoder depending on API)
+    set_viewport: proc(encoder_or_device_handle: rawptr, viewport: Viewport), // Handle could be device or encoder
+    set_scissor: proc(encoder_or_device_handle: rawptr, scissor: Scissor),
+    disable_scissor: proc(encoder_or_device_handle: rawptr),
+	set_pipeline: proc(encoder_or_device_handle: rawptr, pipeline: Gfx_Pipeline), // Takes encoder for Metal, device for GL
+	set_vertex_buffer: proc(encoder_or_device_handle: rawptr, buffer: Gfx_Buffer, binding_index: u32 = 0, offset: u32 = 0),
+	set_index_buffer: proc(encoder_or_device_handle: rawptr, buffer: Gfx_Buffer, offset: u32 = 0), 
+    
+    // Uniform & Resource Binding (associated with a bound pipeline, on encoder or device)
+	set_uniform_mat4: proc(encoder_or_device_handle: rawptr, pipeline: Gfx_Pipeline, name: string, mat: matrix[4,4]f32) -> common.Engine_Error,
+	set_uniform_vec2: proc(encoder_or_device_handle: rawptr, pipeline: Gfx_Pipeline, name: string, vec: [2]f32) -> common.Engine_Error,
+	set_uniform_vec3: proc(encoder_or_device_handle: rawptr, pipeline: Gfx_Pipeline, name: string, vec: [3]f32) -> common.Engine_Error,
+	set_uniform_vec4: proc(encoder_or_device_handle: rawptr, pipeline: Gfx_Pipeline, name: string, vec: [4]f32) -> common.Engine_Error,
+	set_uniform_int: proc(encoder_or_device_handle: rawptr, pipeline: Gfx_Pipeline, name: string, val: i32) -> common.Engine_Error,
+	set_uniform_float: proc(encoder_or_device_handle: rawptr, pipeline: Gfx_Pipeline, name: string, val: f32) -> common.Engine_Error,
+	bind_texture_to_unit: proc(encoder_or_device_handle: rawptr, texture: Gfx_Texture, unit: u32, stage: Shader_Stage) -> common.Engine_Error, // Added Shader_Stage
+
+	// Framebuffer Management (Offscreen rendering)
 	create_framebuffer: proc(device: Gfx_Device, width, height: int, color_format: Texture_Format, depth_format: Texture_Format) -> (Gfx_Framebuffer, common.Engine_Error),
 	destroy_framebuffer: proc(framebuffer: Gfx_Framebuffer),
 
-	// Render Pass Management
+	// Render Pass Management (For Vulkan-style render pass objects, less direct for Metal/GL main pass)
 	create_render_pass: proc(device: Gfx_Device, framebuffer: Gfx_Framebuffer, clear_color, clear_depth: bool) -> (Gfx_Render_Pass, common.Engine_Error),
-	begin_render_pass: proc(device: Gfx_Device, render_pass: Gfx_Render_Pass, clear_color: math.Color, clear_depth: f32),
-	end_render_pass: proc(device: Gfx_Device, render_pass: Gfx_Render_Pass),
+	// begin_render_pass and end_render_pass are now more general for the main swapchain pass.
+	// The Gfx_Render_Pass object might be used for offscreen passes.
 
-	// State Management
+	// State Management (These might be part of Pipeline creation or dynamic on encoder/device)
 	set_blend_mode: proc(device: Gfx_Device, blend_mode: Blend_Mode),
 	set_depth_test: proc(device: Gfx_Device, enabled: bool, write: bool, func: Depth_Func),
 	set_cull_mode: proc(device: Gfx_Device, cull_mode: Cull_Mode),

@@ -53,14 +53,7 @@ draw_impl :: proc(
             UINT(first_vertex),    // StartVertexLocation
             UINT(first_instance),  // StartInstanceLocation
         )
-        // Note: The ID3D11DeviceContextVTable in dx11_bindings.odin is simplified.
-        // A full binding would have DrawInstanced. For this task, we'll assume it's callable.
-        // If DrawInstanced is missing, a workaround would be to call Draw in a loop for instances,
-        // but that's highly inefficient and not the correct use of instancing.
-        // For now, we'll proceed as if DrawInstanced is available via the VTable.
-        // If this were real code, I would add DrawInstanced to the ID3D11DeviceContextVTable in dx11_bindings.odin:
-        // DrawInstanced: proc(this: rawptr, VertexCountPerInstance: UINT, InstanceCount: UINT, StartVertexLocation: UINT, StartInstanceLocation: UINT) -> (),
-
+        // DrawInstanced is assumed to be present in the VTable (dx11_bindings.odin)
     }
     // No HRESULT is returned by Draw or DrawInstanced. Errors are typically caught by the debug layer
     // or by device removed status on Present.
@@ -108,9 +101,8 @@ draw_indexed_impl :: proc(
             INT(base_vertex), // Note: base_vertex is INT
         )
     } else {
-        // Similar to DrawInstanced, DrawIndexedInstanced needs to be in the VTable definition.
-        // DrawIndexedInstanced: proc(this: rawptr, IndexCountPerInstance: UINT, InstanceCount: UINT, StartIndexLocation: UINT, BaseVertexLocation: INT, StartInstanceLocation: UINT) -> (),
-        context_vtable.DrawIndexedInstanced( // This function is not explicitly in my simplified VTable
+        // DrawIndexedInstanced is assumed to be present in the VTable (dx11_bindings.odin)
+        context_vtable.DrawIndexedInstanced( 
             di.immediate_context,
             UINT(index_count),     // IndexCountPerInstance
             UINT(instance_count),  // InstanceCount

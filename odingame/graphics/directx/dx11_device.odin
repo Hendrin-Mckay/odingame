@@ -4,10 +4,15 @@ import "../gfx_interface"
 import "../../common"
 import "./dx11_types"
 import "./dx11_bindings" // Import the new bindings
+import core "../../../core"       // For core.Window (alias to graphics.Game_Window)
+// graphics/types is where Gfx_Window and its variants like Dx11_Window_Variant might be defined if not in dx11_types
+// import gfx_types "../../types" // dx11_types.odin seems to define Dx11_Window_Variant
 import "core:log"
 import "core:mem"
 import "core:os"
 import "core:sys/windows" // For HWND
+import sdl "vendor:sdl2"           // For sdl.Window
+import sdl_syswm "vendor:sdl2/syswm" // For SDL_SysWMInfo
 
 // Global toggle for debug layer, can be set by engine config later
 ENABLE_D3D11_DEBUG_LAYER :: true
@@ -182,8 +187,8 @@ destroy_device_impl :: proc(device_handle: gfx_interface.Gfx_Device) {
 
 create_window_impl :: proc(
     device_handle: gfx_interface.Gfx_Device, 
-    window_ptr: rawptr, // Expecting ^core.Window which contains HWND
-    title: string, // Title is mainly for the OS window, D3D doesn't use it directly
+    sdl_window_handle_rawptr: rawptr, // Changed parameter name
+    title: string, 
     width, height: int,
     vsync: bool,
 ) -> (gfx_interface.Gfx_Window, common.Engine_Error) {
@@ -196,30 +201,37 @@ create_window_impl :: proc(
     }
     di := device_internal_ptr
 
-    // 1. Obtain HWND
-    // The window_ptr is expected to be ^core.Window from odingame/core/window.odin
-    // which should have an `hwnd: sys.windows.HWND` field.
-    // This requires importing `core "../../../core"` and defining `core.Window` struct or accessing HWND via a helper.
-    // For now, let's assume window_ptr IS the HWND for simplicity of this step,
-    // or it's a struct from which we can get it.
-    // A proper solution would be to pass HWND directly or have a clear way to get it.
-    
-    // TEMPORARY: Use a passed HWND directly if possible, or a simulated one for now.
-    // The API should be `hwnd: windows.HWND` not `window_ptr: rawptr` for clarity.
-    // Let's assume for now `window_ptr` is actually the HWND.
-    // hwnd_val := windows.HWND(window_ptr) // This is dangerous if window_ptr is not HWND.
-    // A better approach would be:
-    // core_window := (^core.Window)(window_ptr)
-    // hwnd_val := core_window.hwnd
-    // For this exercise, we'll require the caller to provide a valid HWND via window_ptr.
-    // If window_ptr is nil, this is an error.
-    if window_ptr == nil {
-        log.error("DirectX 11: create_window_impl: HWND (via window_ptr) is nil.")
+    // 1. Obtain HWND from sdl_window_handle_rawptr
+    if sdl_window_handle_rawptr == nil {
+        log.error("DirectX 11: create_window_impl: sdl_window_handle_rawptr is nil.")
         return gfx_interface.Gfx_Window{}, common.Engine_Error.Invalid_Parameter
     }
-    hwnd_val := windows.HWND(window_ptr) // Treat window_ptr as HWND for now.
 
-    log.infof("DirectX 11: Window HWND: %p for title '%s'", hwnd_val, title)
+    sdl_win := (^sdl.Window)(sdl_window_handle_rawptr);
+    wm_info: sdl_syswm.Info;
+    sdl_syswm.GetVersion(&wm_info.version); 
+    if !sdl_syswm.GetWindowWMInfo(sdl_win, &wm_info) {
+        log.errorf("DirectX 11: SDL_GetWindowWMInfo failed: %s", sdl.GetError());
+        return gfx_interface.Gfx_Window{}, common.Engine_Error.Graphics_Resource_Creation_Failed;
+    }
+
+    hwnd_val: windows.HWND;
+    #partial switch wm_info.subsystem {
+    case .WINDOWS:
+        // The field for HWND in SDL_SysWMinfo_win is typically `hwnd`.
+        // The bindings might expose it as `info.win.window` or `info.win.hwnd`.
+        // Checking common `sdl2` package structure, it's usually `hwnd`.
+        hwnd_val = wm_info.info.win.hwnd; 
+    else:
+        log.errorf("DirectX 11: Unsupported SDL window subsystem for HWND: %v", wm_info.subsystem);
+        return gfx_interface.Gfx_Window{}, common.Engine_Error.Invalid_Operation;
+    }
+    
+    if hwnd_val == nil {
+        log.error("DirectX 11: create_window_impl: Failed to obtain HWND from SDL window.");
+        return gfx_interface.Gfx_Window{}, common.Engine_Error.Graphics_Resource_Creation_Failed;
+    }
+    log.infof("DirectX 11: Obtained HWND: %p for title '%s'", hwnd_val, title);
 
     // 2. DXGI Swap Chain Description
     swap_chain_desc := DXGI_SWAP_CHAIN_DESC1 {

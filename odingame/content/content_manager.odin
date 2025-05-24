@@ -8,6 +8,7 @@ import "../core" // For ^core.Game, to access services like GraphicsDevice
 import "../graphics" // For graphics.Texture2D, graphics.Graphics_Device, graphics.load_texture_from_file, graphics._new_texture2D_from_gfx_texture etc.
 import "../common"
 import "../gfx_interface" // For gfx_api
+import audio "../audio"   // Added for audio types and loading functions
 
 // IDisposable interface
 IDisposable :: interface {
@@ -74,20 +75,13 @@ _internal_load_texture2D_from_file :: proc(
     }
     low_level_device := gd_wrapper._gfx_device
 
-    // Call the updated graphics.load_texture_from_file which returns (Gfx_Texture, original_format, error)
     gfx_texture_handle, original_gfx_fmt, err := graphics.load_texture_from_file(low_level_device, full_path, true)
     if err != .None {
-        // Error already logged by graphics.load_texture_from_file or its callees
         return nil, err 
     }
 
-    // Gfx_Texture from gfx_interface might not have mip_levels directly.
-    // Assuming it's 1 if not generated, or CreateTexture stores it.
-    // For now, default to 1. The create_texture might need to return this.
-    // The `gfx_interface.Gfx_Texture` struct definition itself has `width, height, format, mip_levels`.
     num_mip_levels := gfx_texture_handle.mip_levels
     if num_mip_levels == 0 { num_mip_levels = 1 }
-
 
     tex2d := graphics._new_texture2D_from_gfx_texture(
         gd_wrapper, 
@@ -115,26 +109,16 @@ content_load_texture2D :: proc(cm: ^Content_Manager, asset_name: string) -> (^gr
     if cm.root_directory == "" || cm.root_directory == "." || filepath.is_abs(normalized_name) {
         full_path = normalized_name
     } else {
-        full_path = filepath.join({cm.root_directory, normalized_name}, cm.allocator)
-        // Simpler join if filepath.join is problematic with temp allocators or styles:
-        // full_path = strings.concatenate({cm.root_directory, "/", normalized_name}, cm.allocator)
-        // For now, assume filepath.join works as expected or paths are simple.
-        // If using temp allocator for join, defer free. For now, assume cm.allocator is okay or path is not too long for stack.
-        // Let's use a simpler join for now:
         if strings.has_suffix(cm.root_directory, "/") || strings.has_suffix(cm.root_directory, "\\") {
              full_path = cm.root_directory + normalized_name
         } else {
              full_path = cm.root_directory + "/" + normalized_name
         }
-        full_path = filepath.clean(full_path) // Clean the joined path
+        full_path = filepath.clean(full_path) 
     }
-
 
     log.debugf("ContentManager: Attempting to load Texture2D '%s' (normalized) from path '%s'", normalized_name, full_path)
     texture_asset, err := _internal_load_texture2D_from_file(cm, full_path)
-
-    // If filepath.join allocated memory for full_path, it should be freed here if necessary.
-    // If using the simpler concatenation, no free needed for full_path itself unless root_directory or asset_name were allocated.
 
     if err != .None || texture_asset == nil {
         return nil, err
@@ -142,16 +126,87 @@ content_load_texture2D :: proc(cm: ^Content_Manager, asset_name: string) -> (^gr
 
     cm._loaded_assets[normalized_name] = rawptr(texture_asset)
     
-    // IDisposable handling:
-    // Texture2D is expected to have a dispose method. If it were a generic IDisposable system:
-    // if disp_iface, ok := (^IDisposable)(rawptr(texture_asset)); ok { // This cast is potentially unsafe / needs care
-    //     append(&cm._disposable_assets, disp_iface)
-    // }
-    // For now, type-specific handling in UnloadAll is safer.
-
     log.infof("ContentManager: Texture2D '%s' loaded and cached.", normalized_name)
     return texture_asset, .None
 }
+
+// In package content
+content_load_sound_effect :: proc(cm: ^Content_Manager, asset_name: string) -> (effect: audio.SoundEffect, err: common.Engine_Error) {
+    if cm == nil { return audio.SoundEffect(nil), .Invalid_Parameter }
+    
+    normalized_name := _normalize_asset_name(asset_name)
+    
+    if loaded_asset_ptr, found := cm._loaded_assets[normalized_name]; found {
+        // Assume it's a SoundEffect if found under this loading path.
+        return audio.SoundEffect(loaded_asset_ptr), .None
+    }
+
+    full_path: string
+    if cm.root_directory == "" || cm.root_directory == "." || filepath.is_abs(normalized_name) {
+        full_path = normalized_name
+    } else {
+        if strings.has_suffix(cm.root_directory, "/") || strings.has_suffix(cm.root_directory, "\\") {
+             full_path = cm.root_directory + normalized_name
+        } else {
+             full_path = cm.root_directory + "/" + normalized_name
+        }
+        full_path = filepath.clean(full_path)
+    }
+
+    log.debugf("ContentManager: Attempting to load SoundEffect '%s' from path '%s'", normalized_name, full_path)
+    
+    maybe_effect := audio.load_sound_effect(full_path) 
+
+    if !maybe_effect.ok {
+        log.errorf("ContentManager: Failed to load SoundEffect '%s'.", normalized_name)
+        return audio.SoundEffect(nil), .Sound_Loading_Failed 
+    }
+
+    cm._loaded_assets[normalized_name] = rawptr(maybe_effect.value) 
+    // Note: audio.SoundEffect is already a rawptr (distinct mix.Chunk_Handle)
+
+    log.infof("ContentManager: SoundEffect '%s' loaded and cached.", normalized_name)
+    return maybe_effect.value, .None
+}
+
+// In package content
+content_load_music :: proc(cm: ^Content_Manager, asset_name: string) -> (music: audio.Music, err: common.Engine_Error) {
+    if cm == nil { return audio.Music(nil), .Invalid_Parameter }
+    
+    normalized_name := _normalize_asset_name(asset_name)
+    
+    if loaded_asset_ptr, found := cm._loaded_assets[normalized_name]; found {
+        return audio.Music(loaded_asset_ptr), .None
+    }
+
+    full_path: string
+    if cm.root_directory == "" || cm.root_directory == "." || filepath.is_abs(normalized_name) {
+        full_path = normalized_name
+    } else {
+        if strings.has_suffix(cm.root_directory, "/") || strings.has_suffix(cm.root_directory, "\\") {
+             full_path = cm.root_directory + normalized_name
+        } else {
+             full_path = cm.root_directory + "/" + normalized_name
+        }
+        full_path = filepath.clean(full_path)
+    }
+    
+    log.debugf("ContentManager: Attempting to load Music '%s' from path '%s'", normalized_name, full_path)
+
+    maybe_music := audio.load_music(full_path)
+
+    if !maybe_music.ok {
+        log.errorf("ContentManager: Failed to load Music '%s'.", normalized_name)
+        return audio.Music(nil), .Sound_Loading_Failed 
+    }
+
+    cm._loaded_assets[normalized_name] = rawptr(maybe_music.value)
+    // Note: audio.Music is already a rawptr (distinct mix.Music_Handle)
+
+    log.infof("ContentManager: Music '%s' loaded and cached.", normalized_name)
+    return maybe_music.value, .None
+}
+
 
 // --- Asset Unloading ---
 content_unload_all :: proc(cm: ^Content_Manager) {
@@ -164,61 +219,85 @@ content_unload_all :: proc(cm: ^Content_Manager) {
         if disposable_asset != nil {
             // This requires the pointer stored to be directly callable as ^IDisposable
             // disposable_asset.dispose() // This line requires IDisposable to be a concrete type or careful casting.
-            // For now, this loop is conceptual.
         }
     }
     clear(&cm._disposable_assets)
 
-    // Iterate all loaded assets and dispose/free them based on known types
+    // HACK: Iterate _loaded_assets. Guess type by extension for unloading.
+    // This is not robust. A proper system would store asset types or use separate maps.
     for asset_name, asset_ptr in cm._loaded_assets {
-        log.debugf("ContentManager: Unloading asset '%s' (%p)", asset_name, asset_ptr)
+        log.debugf("ContentManager: Attempting to unload asset '%s' (%p)", asset_name, asset_ptr)
         
-        // For now, assume all loaded assets are ^graphics.Texture2D
-        tex2d_asset := (^graphics.Texture2D)(asset_ptr)
-        if tex2d_asset != nil {
-            // 1. Call the Texture2D's own dispose method (marks as disposed)
-            graphics.texture2D_dispose(tex2d_asset) 
+        unloaded := false
+        if strings.has_suffix(asset_name, ".png") || strings.has_suffix(asset_name, ".jpg") || 
+           strings.has_suffix(asset_name, ".bmp") || strings.has_suffix(asset_name, ".tga") {
             
-            // 2. Explicitly destroy the underlying Gfx_Texture GPU resource
-            if tex2d_asset._gfx_texture.variant != nil {
-                can_destroy_gpu_resource := false
-                if cm.game_ref != nil && cm.game_ref.graphics_device_manager != nil &&
-                   cm.game_ref.graphics_device_manager.graphics_device != nil &&
-                   cm.game_ref.graphics_device_manager.graphics_device._gfx_device.variant != nil {
-                    can_destroy_gpu_resource = true
+            tex2d_asset := (^graphics.Texture2D)(asset_ptr) 
+            if tex2d_asset != nil { 
+                graphics.texture2D_dispose(tex2d_asset) 
+                if tex2d_asset._gfx_texture.variant != nil {
+                    can_destroy_gpu_resource := cm.game_ref != nil && cm.game_ref.graphics_device_manager != nil &&
+                                           cm.game_ref.graphics_device_manager.graphics_device != nil &&
+                                           cm.game_ref.graphics_device_manager.graphics_device._gfx_device.variant != nil
+                    if can_destroy_gpu_resource {
+                        gfx_api.destroy_texture(tex2d_asset._gfx_texture) 
+                    } else {
+                        log.errorf("ContentManager: Cannot destroy _gfx_texture for '%s', Graphics_Device not available.", asset_name)
+                    }
                 }
-
-                if can_destroy_gpu_resource {
-                    // destroy_texture from graphics/texture.odin takes Gfx_Texture by value
-                    // and handles ref counting for GL. For DX, it's direct release.
-                    // The gfx_api.destroy_texture is the one to call.
-                    gfx_api.destroy_texture(tex2d_asset._gfx_texture) 
-                } else {
-                    log.errorf("ContentManager: Cannot destroy _gfx_texture for '%s', Graphics_Device not available during unload.", asset_name)
-                }
+                free(tex2d_asset, cm.allocator) 
+                unloaded = true
+                log.debugf("ContentManager: Unloaded texture asset '%s'.", asset_name)
+            } else {
+                 log.warnf("ContentManager: Asset '%s' (assumed Texture2D) was nil after cast.", asset_name)
             }
-            // 3. Free the Texture2D struct itself (allocated by ContentManager)
-            free(tex2d_asset, cm.allocator) 
+        } else if strings.has_suffix(asset_name, ".wav") {
+            log.debugf("ContentManager: Assuming '%s' is SoundEffect, attempting to unload.", asset_name)
+            effect_handle := audio.SoundEffect(asset_ptr)
+            audio.destroy_sound_effect(effect_handle) 
+            unloaded = true
+            log.debugf("ContentManager: Unloaded sound effect asset '%s'.", asset_name)
+        } else if strings.has_suffix(asset_name, ".ogg") || strings.has_suffix(asset_name, ".mp3") {
+             log.debugf("ContentManager: Assuming '%s' is Music, attempting to unload.", asset_name)
+             music_handle := audio.Music(asset_ptr)
+             audio.destroy_music(music_handle) 
+             unloaded = true
+             log.debugf("ContentManager: Unloaded music asset '%s'.", asset_name)
+        }
+        
+        if !unloaded {
+            log.warnf("ContentManager: Asset '%s' (%p) was not unloaded. Type unknown or unload not implemented for this type.", asset_name, asset_ptr)
         }
     }
     clear(&cm._loaded_assets) 
 
-    log.info("ContentManager: All assets unloaded.")
+    log.info("ContentManager: Finished attempting to unload all assets. Some may have been skipped if type was unknown.")
 }
 
 
 // Generic content_load (conceptual for now)
+// SKIPPED update for this subtask due to type complexities with ^T for rawptr handle types.
 content_load :: proc(cm: ^Content_Manager, $T: typeid, asset_name: string) -> (asset: ^T, err: common.Engine_Error) {
     #partial switch T {
     case graphics.Texture2D:
-        // This cast is okay because content_load_texture2D returns ^graphics.Texture2D
         tex, load_err := content_load_texture2D(cm, asset_name)
-        return tex, load_err
+        return tex, load_err 
     // case audio.Sound_Effect:
-    //     return content_load_sound_effect(cm, asset_name)
-    // ... other types
+    //     // This would require returning ^audio.SoundEffect, but audio.SoundEffect is rawptr.
+    //     // Would need to allocate memory for the rawptr and return a pointer to that.
+    //     effect, load_err := content_load_sound_effect(cm, asset_name)
+    //     if load_err == .None {
+    //         // ptr_to_effect := new(audio.SoundEffect, cm.allocator)
+    //         // ptr_to_effect^ = effect
+    //         // return ptr_to_effect, .None
+    //         // This approach complicates unloading and ownership.
+    //     }
+    //     // Fallthrough to unsupported for now
+    // case audio.Music:
+    //     // Similar issue as SoundEffect
+    //     // Fallthrough to unsupported for now
     case:
-        log.errorf("Content_Manager: Cannot load asset of type %v for asset '%s'", T, asset_name)
-        return nil, .Unsupported_Asset_Type
+        log.errorf("Content_Manager: Generic content_load: Asset type %v not supported for asset '%s'", T, asset_name)
+        return nil, .Resource_Not_Found // Or a more specific "type not supported by generic load" error
     }
 }

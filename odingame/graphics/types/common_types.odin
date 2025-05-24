@@ -1,6 +1,7 @@
 package graphics.types
 
 import "../types" // For types.Recti
+import gfx_interface "../gfx_interface" // Added for Gfx_Shader type
 
 // Gfx_Handle and INVALID_HANDLE
 Gfx_Handle :: u32
@@ -287,8 +288,11 @@ Vertex_Buffer_Layout_Desc :: struct { // New, more descriptive name for pipeline
 }
 
 Gfx_Pipeline_Desc :: struct {
-	shader_handle:         Gfx_Handle,
-	// Use an array of buffer layouts for potentially multiple vertex buffers
+    vertex_shader:         gfx_interface.Gfx_Shader, // Type from gfx_interface
+    pixel_shader:          gfx_interface.Gfx_Shader, // Type from gfx_interface
+    // geometry_shader:    gfx_interface.Gfx_Shader, // Optional for future
+    // compute_shader:     gfx_interface.Gfx_Shader,  // Optional for future
+	
 	vertex_buffer_layouts: [dynamic]Vertex_Buffer_Layout_Desc, 
 	primitive_topology:    Primitive_Topology,
 	blend_state:           Gfx_Pipeline_Blend_State_Desc,

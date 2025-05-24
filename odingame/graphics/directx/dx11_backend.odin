@@ -65,9 +65,9 @@ initialize_d3d11_backend :: proc() -> common.Engine_Error {
         end_render_pass = end_render_pass_impl,
         
         // State management
-        set_blend_mode = set_blend_mode_impl,
-        set_depth_test = set_depth_test_impl,
-        set_cull_mode = set_cull_mode_impl,
+        // Removed: set_blend_mode = set_blend_mode_impl,
+        // Removed: set_depth_test = set_depth_test_impl,
+        // Removed: set_cull_mode = set_cull_mode_impl,
         
         // Drawing
         draw = draw_impl,

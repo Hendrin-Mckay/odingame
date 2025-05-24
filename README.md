@@ -8,8 +8,8 @@ A modern, cross-platform game development framework for the [Odin Programming La
 - **Multiple Graphics Backends**:
   - OpenGL (fully implemented)
   - Vulkan (fully implemented)
-  - DirectX (Windows only, stub implementation)
-  - Metal (macOS only, stub implementation)
+  - DirectX (Windows only, stub implementation - **not yet functional**)
+  - Metal (macOS only, stub implementation - **not yet functional**)
 - **Automatic Backend Selection**: Chooses the best available graphics API for the current platform
 - **Sprite Rendering**: Efficient 2D sprite batching system
 - **Input Handling**: Keyboard, mouse, and gamepad support

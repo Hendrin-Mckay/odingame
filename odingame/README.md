@@ -10,7 +10,7 @@ This is an initial version focusing on the core functionalities.
 
 - **Windowing:** Creation and management of the game window.
 - **Graphics Device:** Basic OpenGL context initialization and control.
-- **SpriteBatch:** Efficient 2D sprite rendering with transformations (position, scale, rotation - Note: current SpriteBatch is immediate mode).
+- **SpriteBatch:** Efficient 2D sprite rendering with transformations (position, scale, rotation - Note: SpriteBatch uses batched rendering for efficiency).
 - **Texture Loading:** Loading `Texture2D` assets from image files (e.g., PNG via SDL_image).
 - **Input Handling:** Processing keyboard and mouse input.
 - **Game Loop:** Structured `Initialize`, `LoadContent`, `Update`, `Draw` game loop.

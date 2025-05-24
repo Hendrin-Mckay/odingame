@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #222831; /* dark-grey */
+    color: #DFD0B8; /* light-beige */
+  }
+  /* Define custom color classes if needed, though direct use of hex in Tailwind is often preferred for simplicity unless these specific names are crucial for many components */
+  .bg-dark-grey { background-color: #222831; }
+  .bg-medium-grey { background-color: #393E46; }
+  .text-desaturated-brown { color: #948979; }
+  .border-desaturated-brown { border-color: #948979; }
+  .text-light-beige { color: #DFD0B8; }
+  .bg-light-beige { background-color: #DFD0B8; } /* Added for flexibility */
+  .hover\:text-desaturated-brown:hover { color: #948979; } /* For link hovers etc. */
+}
+
+/* Placeholder for any additional custom CSS not achievable with Tailwind */

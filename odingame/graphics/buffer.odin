@@ -2,6 +2,7 @@ package graphics
 
 import gl "vendor:OpenGL/gl"
 import "../common" // For common.Engine_Error
+import graphics_types "./types" // Import for graphics-specific types
 import "core:log"
 import "core:mem"
 import "core:unsafe" // For size_of
@@ -11,7 +12,7 @@ import "core:unsafe" // For size_of
 Gl_Buffer :: struct {
 	id:             u32,
 	size:           int,
-	type:           Buffer_Type,
+	type:           graphics_types.Buffer_Type, // Use qualified type
 	gl_target:      gl.GLenum, // e.g., gl.ARRAY_BUFFER, gl.ELEMENT_ARRAY_BUFFER
 	gl_usage:       gl.GLenum, // e.g., gl.STATIC_DRAW, gl.DYNAMIC_DRAW
 	main_allocator: ^rawptr,
@@ -20,7 +21,7 @@ Gl_Buffer :: struct {
 
 // --- Implementation of Gfx_Device_Interface buffer functions ---
 
-gl_create_buffer_impl :: proc(device: Gfx_Device, type: Buffer_Type, size: int, data: rawptr = nil, dynamic: bool = false) -> (Gfx_Buffer, common.Engine_Error) {
+gl_create_buffer_impl :: proc(device: Gfx_Device, type: graphics_types.Buffer_Type, size: int, data: rawptr = nil, dynamic: bool = false) -> (Gfx_Buffer, common.Engine_Error) { // Use qualified type
 	device_ptr, ok_device := device.variant.(^Gl_Device)
 	if !ok_device {
 		log.error("gl_create_buffer: Invalid Gfx_Device type.")

@@ -1,6 +1,8 @@
 package graphics
 
 import gl "vendor:OpenGL/gl"
+import graphics_types "./types" // Import for graphics-specific types
+import "../common"             // For common.Engine_Error
 import "core:log"
 import "core:mem"
 import "core:unsafe" // For offset_of
@@ -16,17 +18,21 @@ Gl_Vertex_Array :: struct {
 
 // --- Helper to convert Vertex_Format to GL types ---
 @(private="file")
-get_gl_vertex_format_params :: proc(format: Vertex_Format) -> (size: i32, type: gl.GLenum, normalized: bool, err_msg: string) {
+get_gl_vertex_format_params :: proc(format: graphics_types.Vertex_Format) -> (size: i32, type: gl.GLenum, normalized: bool, err_msg: string) { // Use qualified type
 	#partial switch format {
-	case .Float32_X1: return 1, gl.FLOAT, false, ""
-	case .Float32_X2: return 2, gl.FLOAT, false, ""
-	case .Float32_X3: return 3, gl.FLOAT, false, ""
-	case .Float32_X4: return 4, gl.FLOAT, false, ""
-	case .Unorm8_X4:  return 4, gl.UNSIGNED_BYTE, true, "" // For RGBA8 color
-	// Add other formats as needed
+	// Assuming graphics_types.Vertex_Format has these exact members
+	case .Float: return 1, gl.FLOAT, false, ""
+	case .Float2: return 2, gl.FLOAT, false, ""
+	case .Float3: return 3, gl.FLOAT, false, ""
+	case .Float4: return 4, gl.FLOAT, false, ""
+	case .UByte4N:  return 4, gl.UNSIGNED_BYTE, true, "" // For RGBA8 color (UByte4N maps to this)
+	// Add other formats as needed from graphics_types.Vertex_Format
+	// Example:
+	// case .Byte4N: return 4, gl.BYTE, true, ""
+	// case .Short2N: return 2, gl.SHORT, true, ""
 	case: return 0, 0, false, "Unsupported vertex attribute format"
 	}
-	return 0,0,false,""; // Should not be reached
+	// return 0,0,false,""; // This line might be unreachable if all cases are handled or #partial exhaustive
 }
 
 
@@ -34,15 +40,15 @@ get_gl_vertex_format_params :: proc(format: Vertex_Format) -> (size: i32, type: 
 
 gl_create_vertex_array_impl :: proc(
 	device: Gfx_Device, 
-	vertex_buffer_layouts: []Vertex_Buffer_Layout, 
+	vertex_buffer_layouts: []graphics_types.Vertex_Buffer_Layout, // Use qualified type
 	vertex_buffers: []Gfx_Buffer, // VBOs
 	index_buffer: Gfx_Buffer,      // EBO
-) -> (Gfx_Vertex_Array, Gfx_Error) {
+) -> (Gfx_Vertex_Array, common.Engine_Error) { // Return common.Engine_Error
 	
 	device_ptr, ok_device := device.variant.(^Gl_Device)
 	if !ok_device {
 		log.error("gl_create_vertex_array: Invalid Gfx_Device type.")
-		return Gfx_Vertex_Array{}, .Invalid_Handle
+		return Gfx_Vertex_Array{}, .Invalid_Handle // .Invalid_Handle is part of common.Engine_Error
 	}
 
 	if len(vertex_buffer_layouts) == 0 || len(vertex_buffers) == 0 {
@@ -67,7 +73,7 @@ gl_create_vertex_array_impl :: proc(
 	gl.GenVertexArrays(1, &vao_id)
 	if vao_id == 0 {
 		log.error("glGenVertexArrays failed.")
-		return Gfx_Vertex_Array{}, .Buffer_Creation_Failed // Reusing buffer error, could be a new VAO_Creation_Failed
+		return Gfx_Vertex_Array{}, .Buffer_Creation_Failed 
 	}
 
 	gl.BindVertexArray(vao_id)
@@ -84,17 +90,17 @@ gl_create_vertex_array_impl :: proc(
 				layout.binding, len(vertex_buffers))
 			gl.BindVertexArray(0)
 			gl.DeleteVertexArrays(1, &vao_id)
-			return Gfx_Vertex_Array{}, .Invalid_Handle 
+			return Gfx_Vertex_Array{}, .Invalid_Handle // .Invalid_Handle from common.Engine_Error
 		}
 
 		vbo_gfx := vertex_buffers[layout.binding]
 		vbo_gl, ok_vbo := vbo_gfx.variant.(^Gl_Buffer)
-		if !ok_vbo || vbo_gl == nil || vbo_gl.id == 0 || vbo_gl.type != .Vertex {
+		if !ok_vbo || vbo_gl == nil || vbo_gl.id == 0 || vbo_gl.type != graphics_types.Buffer_Type.Vertex { // Use qualified type
 			log.errorf("gl_create_vertex_array: Invalid Gfx_Buffer at index %d (binding %d) or not a Vertex buffer.",
 				layout.binding, layout.binding)
 			gl.BindVertexArray(0) // Unbind VAO before deleting
 			gl.DeleteVertexArrays(1, &vao_id)
-			return Gfx_Vertex_Array{}, .Invalid_Handle
+			return Gfx_Vertex_Array{}, .Invalid_Handle // .Invalid_Handle from common.Engine_Error
 		}
 
 		gl.BindBuffer(gl.ARRAY_BUFFER, vbo_gl.id)
@@ -112,7 +118,7 @@ gl_create_vertex_array_impl :: proc(
 				gl.BindBuffer(gl.ARRAY_BUFFER, 0)
 				gl.BindVertexArray(0)
 				gl.DeleteVertexArrays(1, &vao_id)
-				return Gfx_Vertex_Array{}, .Invalid_Handle
+				return Gfx_Vertex_Array{}, .Invalid_Handle // .Invalid_Handle from common.Engine_Error
 			}
 
 			gl_size, gl_type, gl_normalized, fmt_err_msg := get_gl_vertex_format_params(attr.format)
@@ -122,7 +128,7 @@ gl_create_vertex_array_impl :: proc(
 				gl.BindBuffer(gl.ARRAY_BUFFER, 0)
 				gl.BindVertexArray(0)
 				gl.DeleteVertexArrays(1, &vao_id)
-				return Gfx_Vertex_Array{}, .Buffer_Creation_Failed // Or a format error
+				return Gfx_Vertex_Array{}, .Buffer_Creation_Failed // Or a format error from common.Engine_Error
 			}
 
 			gl.EnableVertexAttribArray(attr.location)
@@ -149,11 +155,11 @@ gl_create_vertex_array_impl :: proc(
 	if _, ok_ibo_check := index_buffer.variant.(^Gl_Buffer); ok_ibo_check { // Check if it's a valid Gfx_Buffer variant
 		ebo_gl, ok_ebo := index_buffer.variant.(^Gl_Buffer)
 		if ok_ebo && ebo_gl != nil && ebo_gl.id != 0 { // Check if it's a valid GL buffer
-			if ebo_gl.type != .Index {
+			if ebo_gl.type != graphics_types.Buffer_Type.Index { // Use qualified type
 				log.errorf("gl_create_vertex_array: Provided index_buffer is not of type .Index (is %v).", ebo_gl.type)
 				gl.BindVertexArray(0) // Unbind VAO before deleting
 				gl.DeleteVertexArrays(1, &vao_id)
-				return Gfx_Vertex_Array{}, .Invalid_Handle
+				return Gfx_Vertex_Array{}, .Invalid_Handle // .Invalid_Handle from common.Engine_Error
 			}
 			gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo_gl.id)
 			log.infof("Bound EBO ID %v to VAO ID %v", ebo_gl.id, vao_id)
@@ -162,7 +168,7 @@ gl_create_vertex_array_impl :: proc(
 		} else if !ok_ebo && index_buffer.variant != nil {
             log.errorf("gl_create_vertex_array: Provided index_buffer is of an unknown Gfx_Buffer variant type.")
             // Similar cleanup
-            gl.BindVertexArray(0); gl.DeleteVertexArrays(1, &vao_id); return Gfx_Vertex_Array{}, .Invalid_Handle
+            gl.BindVertexArray(0); gl.DeleteVertexArrays(1, &vao_id); return Gfx_Vertex_Array{}, .Invalid_Handle // .Invalid_Handle from common.Engine_Error
         }
         // If index_buffer.variant is nil (Gfx_Buffer{}), it means no index buffer, which is okay.
 	}

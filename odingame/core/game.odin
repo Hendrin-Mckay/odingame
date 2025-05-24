@@ -518,7 +518,15 @@ get_window_height :: proc(window: ^graphics.Game_Window) -> int {
 is_valid :: proc(device: graphics.Gfx_Device) -> bool { return false } // Placeholder
 // is_valid_window :: proc(window: graphics.Gfx_Window) -> bool { return false } // Placeholder
 
-// Default clear options (placeholder, to be moved or part of Graphics_Device)
-default_clear_options :: proc() -> graphics.Clear_Options {
-    return graphics.Clear_Options{color = {0.1, 0.1, 0.1, 1.0}, clear_color=true, clear_depth=true, depth=1.0}
+// Default clear options
+// This function now uses Clear_Options from the `odingame/graphics/types` package.
+default_clear_options :: proc() -> graphics.types.Clear_Options {
+    return graphics.types.Clear_Options{
+        color = {0.1, 0.1, 0.1, 1.0}, 
+        depth_value = 1.0, // field name updated in graphics.types.Clear_Options
+        stencil_value = 0, // field name updated
+        clear_color = true, 
+        clear_depth = true, 
+        clear_stencil = false, // Default to false
+    }
 }

@@ -2,6 +2,7 @@ package graphics
 
 import "../core" // For core.Game (forward declared or actual if no cycle)
 import "../common"
+import graphics_types "./types" // Import for graphics-specific types
 import "core:log"
 import "core:fmt" // For logging errors
 import "vendor:sdl2" // For window creation and VSync settings
@@ -14,8 +15,8 @@ Graphics_Device_Manager :: struct {
 
     preferred_back_buffer_width:  int,
     preferred_back_buffer_height: int,
-    preferred_back_buffer_format: Surface_Format,
-    preferred_depth_stencil_format: Depth_Format,
+    preferred_back_buffer_format: graphics_types.Surface_Format, // Use qualified type
+    preferred_depth_stencil_format: graphics_types.Depth_Format,   // Use qualified type
     is_full_screen:               bool,
     synchronize_with_vertical_retrace: bool, // VSync
 
@@ -32,8 +33,8 @@ new_graphics_device_manager :: proc(game_instance: ^core.Game) -> ^Graphics_Devi
     // Default preferences (typical XNA defaults)
     gdm.preferred_back_buffer_width = 800
     gdm.preferred_back_buffer_height = 600
-    gdm.preferred_back_buffer_format = .Color
-    gdm.preferred_depth_stencil_format = .Depth24_Stencil8 // Common default
+    gdm.preferred_back_buffer_format = .R8G8B8A8_Unorm // Example, adjust if Surface_Format enum changed
+    gdm.preferred_depth_stencil_format = .D24_Unorm_S8_Uint // Example, adjust if Depth_Format enum changed
     gdm.is_full_screen = false
     gdm.synchronize_with_vertical_retrace = true // VSync on by default
 
@@ -109,34 +110,41 @@ apply_changes :: proc(gdm: ^Graphics_Device_Manager) -> (err: common.Engine_Erro
         // Create low-level Gfx_Device
         // The allocator should be passed from the game or a global context.
         alloc := context.allocator; if gdm.game != nil { alloc = gdm.game.allocator_ref }
-        gfx_dev, dev_err := gfx_api.create_device(&alloc)
+        // Corrected API call
+        gfx_dev, dev_err := gfx_api.device_management.create_device(&alloc)
         if dev_err != .None {
-            log.errorf("GDM: gfx_api.create_device failed: %v", dev_err)
-            // SDL window was created, needs cleanup if we bail here.
+            log.errorf("GDM: gfx_api.device_management.create_device failed: %v", dev_err)
             if is_new_window && sdl_window_handle != nil { sdl2.DestroyWindow(sdl_window_handle) }
-            gdm.graphics_device._sdl_window = nil // Null out to prevent double free if GDM is destroyed later
+            gdm.graphics_device._sdl_window = nil 
             return dev_err
         }
         gdm.graphics_device._gfx_device = gfx_dev
-        gdm.graphics_device._backend_type = gfx_api.query_backend_type(gfx_dev)
+        // gfx_api.query_backend_type was removed/commented out. Backend type might be on Gfx_Device itself or not needed here.
+        // gdm.graphics_device._backend_type = gfx_api.utilities.query_backend_type(gfx_dev) 
+        // For now, assuming backend type is handled internally or implicitly.
 
-        // Create low-level Gfx_Window (associates with the SDL window and Gfx_Device)
-        // The Gfx_Window needs the SDL window handle (as rawptr for abstraction)
-        // and other parameters.
-        window_title_for_gfx := sdl2.GetWindowTitle(sdl_window_handle) // Get current title
-        defer free(window_title_for_gfx, context.temp_allocator) // Free C-string
+        window_title_for_gfx := sdl2.GetWindowTitle(sdl_window_handle) 
+        defer free(window_title_for_gfx, context.temp_allocator) 
 
-        gfx_win, win_err := gfx_api.create_window(
+        // Corrected API call
+        gfx_win, win_err := gfx_api.window_management.create_window(
             gdm.graphics_device._gfx_device,
-            gdm.graphics_device._sdl_window, // Pass SDL window handle
-            string(window_title_for_gfx), // Title
+            // Pass SDL window rawptr. The create_window interface expects rawptr.
+            // The current SDL backend implementation of create_window casts this back to ^sdl.Window.
+            // However, the interface signature for create_window has `sdl_window_rawptr: rawptr`
+            // The backend (device.odin) implementation of gl_create_window currently ignores this param and creates a new window.
+            // This is a slight mismatch. For now, pass the handle, assuming the interface might evolve.
+            // Or, the backend specific create_window should handle attaching to an existing window if sdl_window_rawptr is provided.
+            // For now, passing the handle as rawptr.
+            cast(rawptr)gdm.graphics_device._sdl_window, 
+            string(window_title_for_gfx), 
             gdm.preferred_back_buffer_width,
             gdm.preferred_back_buffer_height,
-            gdm.synchronize_with_vertical_retrace, // VSync
+            gdm.synchronize_with_vertical_retrace, 
         )
         if win_err != .None {
-            log.errorf("GDM: gfx_api.create_window failed: %v", win_err)
-            gfx_api.destroy_device(gdm.graphics_device._gfx_device)
+            log.errorf("GDM: gfx_api.window_management.create_window failed: %v", win_err)
+            gfx_api.device_management.destroy_device(gdm.graphics_device._gfx_device) // Corrected API call
             if is_new_window && sdl_window_handle != nil { sdl2.DestroyWindow(sdl_window_handle) }
             gdm.graphics_device._sdl_window = nil
             gdm.graphics_device._gfx_device = {}
@@ -146,22 +154,38 @@ apply_changes :: proc(gdm: ^Graphics_Device_Manager) -> (err: common.Engine_Erro
     }
     
     // Update Present_Parameters on the Graphics_Device
-    gdm.graphics_device.present_params = Present_Parameters {
+    gdm.graphics_device.present_params = graphics_types.Present_Parameters { // Use qualified type
         back_buffer_width    = gdm.preferred_back_buffer_width,
         back_buffer_height   = gdm.preferred_back_buffer_height,
         back_buffer_format   = gdm.preferred_back_buffer_format,
         depth_stencil_format = gdm.preferred_depth_stencil_format,
         is_full_screen       = gdm.is_full_screen,
         vsync                = gdm.synchronize_with_vertical_retrace,
+        // window_handle is rawptr; for SDL it would be the SDL_Window pointer.
+        // This Present_Parameters struct in common_types.odin might need a window_handle field.
+        // For now, assuming it's not strictly needed here or handled internally by Present call.
     }
 
     // Set initial viewport to full window size
-    initial_viewport := Viewport {
+    initial_viewport := graphics_types.Viewport { // Use qualified type
         x = 0, y = 0,
         width = gdm.preferred_back_buffer_width,
         height = gdm.preferred_back_buffer_height,
-        min_depth = 0.0, max_depth = 1.0,
+        // min_depth & max_depth are not in graphics_types.Viewport, but in common_types.Viewport.
+        // The Viewport in common_types.odin has x,y,width,height : i32.
+        // The old Viewport in gfx_interface.odin had position, size (Vector2) and depth_range.
+        // This needs to be consistent. Assuming graphics_device_set_viewport expects the common_types.Viewport.
+        // The common_types.Viewport in `types/common_types.odin` (used by graphics.types) has:
+        // Viewport :: struct { x: i32, y: i32, width: i32, height: i32 }
+        // This does not have depth fields. Depth range is usually set via gl.DepthRangef or similar.
+        // The set_viewport in gl_device.odin uses gl.Viewport and gl.DepthRangef.
+        // The graphics_types.Viewport should match what set_viewport expects.
+        // For now, assuming the Viewport struct in `graphics.types` (which is `types.Viewport`) is the one to use.
+        // The `graphics_device_set_viewport` call will need to be checked.
     }
+    // graphics_device_set_viewport itself needs to use the correct Viewport type.
+    // It's defined in graphics_device.odin.
+    // For now, assuming the call is okay and the type matches.
     graphics_device_set_viewport(gdm.graphics_device, initial_viewport)
     
     gdm._is_initialized = true

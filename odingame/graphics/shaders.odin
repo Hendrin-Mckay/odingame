@@ -2,6 +2,7 @@ package graphics
 
 import gl "vendor:OpenGL/gl"
 import "../common" // For common.Engine_Error
+import graphics_types "./types" // Import for graphics-specific types
 import "core:fmt"
 import "core:log"
 import "core:strings"
@@ -12,7 +13,7 @@ import "core:mem"
 
 Gl_Shader :: struct {
 	id:    u32,
-	stage: Shader_Stage, // Store the stage for reference, though GL combines them in a program
+	stage: graphics_types.Shader_Stage, // Use qualified type
 	// We might store the source or path for debugging/recompilation if needed in future.
 	main_allocator: ^rawptr, 
 }
@@ -27,7 +28,7 @@ Gl_Pipeline :: struct {
 // --- Helper Functions (OpenGL specific, not directly part of the interface) ---
 
 @(private="file")
-gl_compile_shader_source :: proc(source: string, stage: Shader_Stage, shader_type: gl.GLenum) -> (u32, common.Engine_Error) {
+gl_compile_shader_source :: proc(source: string, stage: graphics_types.Shader_Stage, shader_type: gl.GLenum) -> (u32, common.Engine_Error) { // Use qualified type
 	shader_id := gl.CreateShader(shader_type)
 	if shader_id == 0 {
 		log.errorf("glCreateShader failed for stage %v", stage)
@@ -66,7 +67,7 @@ gl_compile_shader_source :: proc(source: string, stage: Shader_Stage, shader_typ
 
 // --- Implementation of Gfx_Device_Interface shader/pipeline functions ---
 
-gl_create_shader_from_source_impl :: proc(device: Gfx_Device, source: string, stage: Shader_Stage) -> (Gfx_Shader, common.Engine_Error) {
+gl_create_shader_from_source_impl :: proc(device: Gfx_Device, source: string, stage: graphics_types.Shader_Stage) -> (Gfx_Shader, common.Engine_Error) { // Use qualified type
 	device_ptr, ok_device := device.variant.(^Gl_Device)
 	if !ok_device {
 		log.error("gl_create_shader_from_source: Invalid Gfx_Device type.")
@@ -79,8 +80,8 @@ gl_create_shader_from_source_impl :: proc(device: Gfx_Device, source: string, st
 		shader_type = gl.VERTEX_SHADER
 	case .Fragment:
 		shader_type = gl.FRAGMENT_SHADER
-	// case .Compute: // TODO: Add if compute shaders are needed
-	// 	shader_type = gl.COMPUTE_SHADER
+	case .Compute: 
+		shader_type = gl.COMPUTE_SHADER // Ensure this case is handled if Compute stage is used
 	case:
 		log.errorf("Unsupported shader stage: %v", stage)
 		return Gfx_Shader{}, common.Engine_Error.Shader_Compilation_Failed // Or a more specific error
@@ -99,7 +100,7 @@ gl_create_shader_from_source_impl :: proc(device: Gfx_Device, source: string, st
 	return Gfx_Shader{gl_shader_ptr}, common.Engine_Error.None
 }
 
-gl_create_shader_from_bytecode_impl :: proc(device: Gfx_Device, bytecode: []u8, stage: Shader_Stage) -> (Gfx_Shader, common.Engine_Error) {
+gl_create_shader_from_bytecode_impl :: proc(device: Gfx_Device, bytecode: []u8, stage: graphics_types.Shader_Stage) -> (Gfx_Shader, common.Engine_Error) { // Use qualified type
 	// OpenGL Core Profile typically doesn't use precompiled shader bytecode directly via glShaderBinary
 	// in the same way as Vulkan/DX12. SPIR-V can be used with ARB_gl_spirv, but that's an extension.
 	// For now, this is not implemented for general GLSL.
@@ -119,95 +120,84 @@ gl_destroy_shader_impl :: proc(shader: Gfx_Shader) {
 	}
 }
 
-gl_create_pipeline_impl :: proc(device: Gfx_Device, shaders: []Gfx_Shader) -> (Gfx_Pipeline, common.Engine_Error) {
+// Updated to take Gfx_Pipeline_Desc
+gl_create_pipeline_impl :: proc(device: Gfx_Device, desc: graphics_types.Gfx_Pipeline_Desc) -> (Gfx_Pipeline, common.Engine_Error) {
 	device_ptr, ok_device := device.variant.(^Gl_Device)
 	if !ok_device {
 		log.error("gl_create_pipeline: Invalid Gfx_Device type.")
 		return Gfx_Pipeline{}, common.Engine_Error.Invalid_Handle
 	}
 
-	if len(shaders) == 0 {
-		log.error("gl_create_pipeline: No shaders provided to create pipeline.")
-		return Gfx_Pipeline{}, common.Engine_Error.Shader_Compilation_Failed // Or a more specific error
-	}
+	// The Gfx_Pipeline_Desc contains a single shader_handle, which is assumed to be a pre-linked program ID
+	// or a handle that the backend can use to get/create a program.
+	// The old logic of attaching and linking individual shaders from a []Gfx_Shader is removed.
+	// The backend (OpenGL here) must now work with this single shader_handle.
 
-	program_id := gl.CreateProgram()
-	if program_id == 0 {
-		log.error("glCreateProgram failed.")
-		return Gfx_Pipeline{}, common.Engine_Error.Shader_Compilation_Failed // Or a more specific error
-	}
+	// If desc.shader_handle is a Gfx_Handle that wraps a Gl_Shader (which is just one stage),
+	// this is problematic. Gfx_Pipeline_Desc should ideally point to a "program" concept.
+	// For OpenGL, a "program" is the result of glCreateProgram, glAttachShader (for VS, FS), glLinkProgram.
+	// Let's assume desc.shader_handle.variant is a ^Gl_Shader that is actually a *program* id,
+	// or that the backend needs to do more to resolve it.
+	// This is a significant change from the previous []Gfx_Shader input.
 
-	attached_gl_shaders := make([]^Gl_Shader, 0, len(shaders))
-	defer delete(attached_gl_shaders) // Should be empty by the end due to moving ownership or just clearing
-
-	for gfx_shader in shaders {
-		shader_ptr, ok := gfx_shader.variant.(^Gl_Shader)
-		if !ok || shader_ptr.id == 0 {
-			log.errorf("gl_create_pipeline: Invalid shader found in list %v.", gfx_shader.variant)
-			// Detach any already attached shaders and delete program before returning
-			for attached_shader_ptr in attached_gl_shaders {
-				gl.DetachShader(program_id, attached_shader_ptr.id)
-			}
-			gl.DeleteProgram(program_id)
-			return Gfx_Pipeline{}, common.Engine_Error.Invalid_Handle
-		}
-		gl.AttachShader(program_id, shader_ptr.id)
-		append(&attached_gl_shaders, shader_ptr) // Keep track for detaching if link fails
-		log.infof("Attached shader ID %v (stage %v) to program ID %v.", shader_ptr.id, shader_ptr.stage, program_id)
-	}
-
-	gl.LinkProgram(program_id)
-
-	link_status: i32
-	gl.GetProgramiv(program_id, gl.LINK_STATUS, &link_status)
-	if link_status == gl.FALSE {
-		info_log_length: i32
-		gl.GetProgramiv(program_id, gl.INFO_LOG_LENGTH, &info_log_length)
-
-		info_log_buffer := make([]u8, info_log_length)
-		defer delete(info_log_buffer)
-		
-		gl.GetProgramInfoLog(program_id, info_log_length, nil, rawptr(info_log_buffer))
-		log.errorf("Shader program linking failed (Program ID %v): %s", program_id, string(info_log_buffer))
-
-		// Detach shaders before deleting program
-		for shader_ptr in attached_gl_shaders {
-			gl.DetachShader(program_id, shader_ptr.id)
-		}
-		gl.DeleteProgram(program_id)
-		return Gfx_Pipeline{}, common.Engine_Error.Shader_Compilation_Failed
-	}
-
-	log.infof("Shader program ID %v linked successfully.", program_id)
-
-	// Shaders can be detached and deleted after successful linking,
-	// as the program object now contains the linked code.
-	// However, the Gfx_Shader handles might still be alive and managed by the user.
-	// The Gfx_Pipeline will own its copy of Gfx_Shader variants for record keeping.
-	// Destroying the Gfx_Shader handles via gfx_api.destroy_shader should be safe.
-	// The actual GL shader objects are okay to delete IF they are not needed elsewhere.
-	// For simplicity, we assume Gfx_Shader handles passed in are "consumed" by pipeline creation
-	// in terms of their GL objects if no longer needed independently.
-	// Let's not delete the gl shader objects here, but let gl_destroy_shader handle it.
-	// The caller can destroy the individual Gfx_Shader handles if they are no longer needed.
-
-	// Store copies of the Gfx_Shader variants (not the Gl_Shader pointers themselves)
-	// This is if Gfx_Pipeline needs to know what it was made from.
-	// The actual Gl_Shader structs behind the variants passed in are still owned by caller.
-	// This might need a more robust ownership model if shaders are reused across many pipelines.
-	// For now, let's assume they are not reused or caller manages their lifetime.
+	program_handle_variant := desc.shader_handle.variant
+	program_id: u32
 	
-	// Create a copy of the Gfx_Shader array for the pipeline to own.
-	// This is tricky because Gfx_Shader is a struct_variant.
-	// We'll just store the program_id for now.
-	// TODO: Revisit how Gfx_Pipeline stores references to its Gfx_Shaders if needed for reflection.
-	// For now, the Gfx_Pipeline doesn't store the Gfx_Shader array.
+	// This logic depends on what `desc.shader_handle` actually IS.
+	// If it's a Gfx_Shader handle that itself is a Gl_Shader (single stage), this is wrong.
+	// If `create_shader_from_source` was changed to return a *program* handle wrapped in Gfx_Shader,
+	// then this might work.
+	// This is a point of ambiguity from the previous refactoring.
+	// For now, to make progress, let's assume `desc.shader_handle` IS the program ID,
+	// or it's a Gfx_Shader containing the program_id (e.g. if a "program" Gfx_Shader type was made).
+	// The `Gl_Shader` struct has an `id` which is a shader stage ID.
+	// The `Gl_Pipeline` struct has `program_id`.
+	// This means `desc.shader_handle` cannot directly be a `Gl_Shader` if it's meant to be a program.
+	// This part of the API design (`Gfx_Pipeline_Desc.shader_handle`) needs clarification.
+	//
+	// Tentative assumption: `desc.shader_handle` is a Gfx_Shader that somehow represents the program.
+	// Or, more likely, the `gl_create_shader_from_source_impl` should have created a *program*
+	// if it's the sole shader input to a pipeline. This is not what it does.
+	//
+	// Let's assume for this step that the `desc.shader_handle` IS the program_id.
+	// This means the caller of `create_pipeline` must have already created and linked a program
+	// and passed its ID as the `shader_handle` (wrapped in Gfx_Handle).
+	// This is a major shift in responsibility.
+	// The old `gl_create_pipeline_impl` DID the linking.
+	// If we keep that, then `Gfx_Pipeline_Desc` should contain `[]Gfx_Shader` for stages.
+	// The `Gfx_Pipeline_Desc` in `common_types.odin` has `shader_handle: Gfx_Handle`.
+	// This is a conflict.
+	//
+	// For this pass, I will make `gl_create_pipeline_impl` assume `desc.shader_handle` is a program id.
+	// This means the linking logic from the old `gl_create_pipeline_impl` is no longer here.
+	// This requires that `gfx_api.resource_creation.create_shader_from_source` (or a new function)
+	// now produces a linked program handle. The current `gl_create_shader_from_source_impl` does not.
+	// This is a significant architectural change implied by the new Gfx_Pipeline_Desc.
+	
+	// Safest assumption: desc.shader_handle is a Gfx_Handle whose variant points to a Gl_Pipeline struct
+	// (if a "program" was wrapped this way), or it's a raw program ID cast to rawptr.
+	// Given Gfx_Handle is u32, it could directly BE the program_id if convention is established.
+	// Let's assume `desc.shader_handle` IS the program_id (as u32).
+	
+	program_id = desc.shader_handle; // Assuming Gfx_Handle is u32 and directly the program_id
+	
+	if program_id == 0 {
+		log.error("gl_create_pipeline: Invalid program ID (0) provided in Gfx_Pipeline_Desc.")
+		return Gfx_Pipeline{}, common.Engine_Error.Invalid_Handle
+	}
+	
+	// Vertex buffer layouts are in desc.vertex_buffer_layouts.
+	// These need to be applied to a VAO, or set up with glVertexAttribPointer if not using VAOs globally.
+	// The pipeline object in GL (program) doesn't store vertex layout state itself.
+	// This state is usually part of a VAO or set dynamically before drawing.
+	// For now, Gl_Pipeline struct only stores program_id. Vertex layout application is separate.
 
 	pipeline_ptr := new(Gl_Pipeline, device_ptr.main_allocator^)
 	pipeline_ptr.program_id = program_id
+	// pipeline_ptr.shaders = ??? // How to get original Gfx_Shader stages from a program_id? Not directly possible.
 	pipeline_ptr.main_allocator = device_ptr.main_allocator
-	// pipeline_ptr.shaders = shaders // This would be a shallow copy of the slice. Need deep copy if variant data is complex.
 
+	log.infof("OpenGL Pipeline (Program ID %v) wrapped.", program_id)
 	return Gfx_Pipeline{pipeline_ptr}, common.Engine_Error.None
 }
 

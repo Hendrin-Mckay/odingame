@@ -1,5 +1,18 @@
 package graphics
 
+import "core:math" // For math.Vector2
+// Assuming engine_types is available at ../types for Color
+// If sprite_types.odin is in odingame/graphics, then ../types is odingame/types
+import engine_types "../types" 
+
+// Sprite_Vertex defines the structure for a single sprite vertex.
+// This was moved from spritebatch.odin.
+Sprite_Vertex :: struct {
+	pos:      math.Vector2, 
+	color:    engine_types.Color, 
+	texcoord: math.Vector2, 
+}
+
 // Sprite_Sort_Mode defines how sprites are sorted before drawing.
 Sprite_Sort_Mode :: enum {
     Deferred,         // Sprites are drawn when End is called, in the order they were submitted. (Default)

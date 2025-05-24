@@ -147,13 +147,14 @@ vk_create_instance_internal :: proc(app_name: string, engine_name: string, alloc
 	if ENABLE_VALIDATION_LAYERS {
 		// Note: debug_create_info was already populated.
 		// We don't need to pass it in pNext for vkCreateDebugUtilsMessengerEXT itself.
-		messenger, debug_res := create_debug_utils_messenger(instance_handle, &debug_create_info, p_vk_allocator)
-		if debug_res == .SUCCESS {
+		messenger, creation_err := create_debug_utils_messenger(instance_handle, &debug_create_info, p_vk_allocator)
+		if creation_err == .None {
 			vk_instance_info.debug_messenger = messenger
 			log.info("Vulkan Debug Messenger created successfully.")
 		} else {
 			// This is not fatal for the instance itself, but log a warning.
-			log.warnf("Failed to create Vulkan Debug Messenger. Result: %v", debug_res)
+			// The error from create_debug_utils_messenger (e.g. .Vulkan_Error) is logged.
+			log.warnf("Failed to create Vulkan Debug Messenger. Error: %v. Instance creation will proceed without it.", creation_err)
 			// Instance is still valid, so don't return error here.
 		}
 	}

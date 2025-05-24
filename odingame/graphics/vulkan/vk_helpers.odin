@@ -156,19 +156,34 @@ create_debug_utils_messenger :: proc(
 	instance: vk.Instance, 
 	create_info: ^vk.DebugUtilsMessengerCreateInfoEXT, 
 	p_allocator: ^vk.AllocationCallbacks, // Can be nil
-) -> (vk.DebugUtilsMessengerEXT, vk.Result) {
+) -> (vk.DebugUtilsMessengerEXT, common.Engine_Error) {
 	
-	messenger: vk.DebugUtilsMessengerEXT
+	messenger: vk.DebugUtilsMessengerEXT = vk.NULL_HANDLE // Initialize to NULL_HANDLE
 	
-	// Get the function pointer for vkCreateDebugUtilsMessengerEXT
+	if instance == vk.NULL_HANDLE {
+		log.error("create_debug_utils_messenger: Vulkan instance is NULL.")
+		return vk.NULL_HANDLE, .Invalid_Handle
+	}
+	if create_info == nil {
+		log.error("create_debug_utils_messenger: create_info is nil.")
+		return vk.NULL_HANDLE, .Invalid_Parameter
+	}
+
 	pfnCreateDebugUtilsMessengerEXT := cast(vk.PFN_vkCreateDebugUtilsMessengerEXT)vk.GetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT")
 	
-	if pfnCreateDebugUtilsMessengerEXT != nil {
-		return messenger, pfnCreateDebugUtilsMessengerEXT(instance, create_info, p_allocator, &messenger)
-	} else {
-		log.error("vkCreateDebugUtilsMessengerEXT function not found. Is VK_EXT_debug_utils enabled?")
-		return messenger, .ERROR_EXTENSION_NOT_PRESENT
+	if pfnCreateDebugUtilsMessengerEXT == nil {
+		log.error("vkCreateDebugUtilsMessengerEXT function not found. Ensure VK_EXT_debug_utils extension is enabled and instance is valid.")
+		return vk.NULL_HANDLE, common.Engine_Error.Vulkan_Feature_Not_Available // Or .Vulkan_Error
 	}
+	
+	result := pfnCreateDebugUtilsMessengerEXT(instance, create_info, p_allocator, &messenger)
+	if result != .SUCCESS {
+		log.errorf("vkCreateDebugUtilsMessengerEXT failed with result: %v", result)
+		return vk.NULL_HANDLE, common.Engine_Error.Vulkan_Error // Or a more specific error if available
+	}
+	
+	log.infof("Vulkan Debug Messenger created successfully: %p", messenger)
+	return messenger, .None
 }
 
 // Helper to destroy a debug utils messenger.

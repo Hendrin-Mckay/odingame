@@ -105,6 +105,7 @@ vk_create_buffer_internal :: proc(
 	buffer_handle: vk.Buffer
 	result := vk.CreateBuffer(logical_device, &buffer_create_info, p_vk_allocator, &buffer_handle)
 	if result != .SUCCESS {
+		log.errorf("vkCreateBuffer failed in vk_create_buffer_internal: %v", result)
 		return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
 	}
 
@@ -125,12 +126,14 @@ vk_create_buffer_internal :: proc(
 	device_memory: vk.DeviceMemory
 	result = vk.AllocateMemory(logical_device, &alloc_info, p_vk_allocator, &device_memory)
 	if result != .SUCCESS {
+		log.errorf("vkAllocateMemory failed in vk_create_buffer_internal: %v", result)
 		vk.DestroyBuffer(logical_device, buffer_handle, p_vk_allocator)
 		return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
 	}
 
 	result = vk.BindBufferMemory(logical_device, buffer_handle, device_memory, 0)
 	if result != .SUCCESS {
+		log.errorf("vkBindBufferMemory failed in vk_create_buffer_internal: %v", result)
 		vk.FreeMemory(logical_device, device_memory, p_vk_allocator)
 		vk.DestroyBuffer(logical_device, buffer_handle, p_vk_allocator)
 		return gfx_interface.Gfx_Buffer{}, common.Engine_Error.Buffer_Creation_Failed
@@ -191,13 +194,21 @@ vk_create_buffer_internal :: proc(
 	}
 }
 
-vk_destroy_buffer_internal :: proc(buffer_handle_gfx: gfx_interface.Gfx_Buffer) {
+vk_destroy_buffer_internal :: proc(buffer_handle_gfx: gfx_interface.Gfx_Buffer) -> common.Engine_Error {
+	if buffer_handle_gfx.variant == nil {
+		log.error("vk_destroy_buffer_internal: Gfx_Buffer variant is nil.")
+		return common.Engine_Error.Invalid_Handle
+	}
+
     // Common cleanup logic for buffer and memory
     destroy_buffer_and_memory :: proc(buffer: vk.Buffer, memory: vk.DeviceMemory, device: vk.Device, p_vk_allocator: ^vk.AllocationCallbacks) {
+        // These are terminal calls, no specific Vulkan errors to return beyond logging.
         if buffer != vk.NULL_HANDLE {
+            log.infof("Destroying Vulkan Buffer: %p on device %p", buffer, device)
             vk.DestroyBuffer(device, buffer, p_vk_allocator)
         }
         if memory != vk.NULL_HANDLE {
+            log.infof("Freeing Vulkan DeviceMemory: %p on device %p", memory, device)
             vk.FreeMemory(device, memory, p_vk_allocator)
         }
     }
@@ -206,40 +217,53 @@ vk_destroy_buffer_internal :: proc(buffer_handle_gfx: gfx_interface.Gfx_Buffer) 
 	
     // Try to assert as ^Vk_Buffer_Internal first
 	if vk_buffer_ptr, ok_buf := buffer_handle_gfx.variant.(^vk_types.Vk_Buffer_Internal); ok_buf && vk_buffer_ptr != nil {
-		if vk_buffer_ptr.device_ref != nil && vk_buffer_ptr.device_ref.logical_device != vk.NULL_HANDLE {
-            logical_device := vk_buffer_ptr.device_ref.logical_device
-            // If it was mapped for non-UBO (not persistent), ensure unmap (though current map_buffer is temporary)
-            if vk_buffer_ptr.mapped_ptr != nil { // This implies a map call without unmap if not UBO
-                log.warnf("Vk_Buffer_Internal %p was still mapped during destruction. Unmapping now.", vk_buffer_ptr.buffer)
-                vk.UnmapMemory(logical_device, vk_buffer_ptr.memory)
-            }
-			destroy_buffer_and_memory(vk_buffer_ptr.buffer, vk_buffer_ptr.memory, logical_device, p_vk_allocator)
-			log.infof("Vk_Buffer_Internal %p destroyed.", vk_buffer_ptr)
-			free(vk_buffer_ptr, vk_buffer_ptr.allocator)
-		} else {
-            log.error("vk_destroy_buffer_internal: device_ref or logical_device is nil for Vk_Buffer_Internal.")
+		if vk_buffer_ptr.device_ref == nil {
+			log.errorf("vk_destroy_buffer_internal (Vk_Buffer_Internal %p): device_ref is nil.", vk_buffer_ptr.buffer)
+			// Still attempt to free struct memory if allocator is valid
+			if vk_buffer_ptr.allocator != nil { free(vk_buffer_ptr, vk_buffer_ptr.allocator) }
+			return common.Engine_Error.Invalid_Handle
+		}
+		if vk_buffer_ptr.device_ref.logical_device == vk.NULL_HANDLE {
+			log.errorf("vk_destroy_buffer_internal (Vk_Buffer_Internal %p): logical_device is nil.", vk_buffer_ptr.buffer)
+			if vk_buffer_ptr.allocator != nil { free(vk_buffer_ptr, vk_buffer_ptr.allocator) }
+			return common.Engine_Error.Invalid_Handle
+		}
+        logical_device := vk_buffer_ptr.device_ref.logical_device
+        if vk_buffer_ptr.mapped_ptr != nil { 
+            log.warnf("Vk_Buffer_Internal %p was still mapped during destruction. Unmapping now.", vk_buffer_ptr.buffer)
+            vk.UnmapMemory(logical_device, vk_buffer_ptr.memory) // mapped_ptr should be nilled by unmap_buffer_internal if called prior
         }
-		return
+		destroy_buffer_and_memory(vk_buffer_ptr.buffer, vk_buffer_ptr.memory, logical_device, p_vk_allocator)
+		log.infof("Vk_Buffer_Internal structure %p (buffer %p) freed.", vk_buffer_ptr, vk_buffer_ptr.buffer)
+		free(vk_buffer_ptr, vk_buffer_ptr.allocator)
+		return .None
 	}
 
     // Try to assert as ^Vk_Uniform_Buffer_Info
 	if ubo_info_ptr, ok_ubo := buffer_handle_gfx.variant.(^vk_types.Vk_Uniform_Buffer_Info); ok_ubo && ubo_info_ptr != nil {
-		if ubo_info_ptr.device_ref != nil && ubo_info_ptr.device_ref.logical_device != vk.NULL_HANDLE {
-            logical_device := ubo_info_ptr.device_ref.logical_device
-            if ubo_info_ptr.mapped_ptr != nil { // Persistently mapped
-                vk.UnmapMemory(logical_device, ubo_info_ptr.memory)
-                log.debugf("Unmapped persistently mapped UBO %p", ubo_info_ptr.buffer)
-            }
-			destroy_buffer_and_memory(ubo_info_ptr.buffer, ubo_info_ptr.memory, logical_device, p_vk_allocator)
-			log.infof("Vk_Uniform_Buffer_Info %p destroyed.", ubo_info_ptr)
-			free(ubo_info_ptr, ubo_info_ptr.allocator)
-		} else {
-            log.error("vk_destroy_buffer_internal: device_ref or logical_device is nil for Vk_Uniform_Buffer_Info.")
+		if ubo_info_ptr.device_ref == nil {
+			log.errorf("vk_destroy_buffer_internal (Vk_Uniform_Buffer_Info %p): device_ref is nil.", ubo_info_ptr.buffer)
+			if ubo_info_ptr.allocator != nil { free(ubo_info_ptr, ubo_info_ptr.allocator) }
+			return common.Engine_Error.Invalid_Handle
+		}
+		if ubo_info_ptr.device_ref.logical_device == vk.NULL_HANDLE {
+			log.errorf("vk_destroy_buffer_internal (Vk_Uniform_Buffer_Info %p): logical_device is nil.", ubo_info_ptr.buffer)
+			if ubo_info_ptr.allocator != nil { free(ubo_info_ptr, ubo_info_ptr.allocator) }
+			return common.Engine_Error.Invalid_Handle
+		}
+        logical_device := ubo_info_ptr.device_ref.logical_device
+        if ubo_info_ptr.mapped_ptr != nil { // Persistently mapped
+            log.debugf("Unmapping persistently mapped UBO %p prior to destruction.", ubo_info_ptr.buffer)
+            vk.UnmapMemory(logical_device, ubo_info_ptr.memory)
         }
-		return
+		destroy_buffer_and_memory(ubo_info_ptr.buffer, ubo_info_ptr.memory, logical_device, p_vk_allocator)
+		log.infof("Vk_Uniform_Buffer_Info structure %p (buffer %p) freed.", ubo_info_ptr, ubo_info_ptr.buffer)
+		free(ubo_info_ptr, ubo_info_ptr.allocator)
+		return .None
 	}
 
 	log.errorf("vk_destroy_buffer_internal: Invalid Gfx_Buffer variant type (%T) or nil pointer.", buffer_handle_gfx.variant)
+	return common.Engine_Error.Invalid_Handle
 }
 
 
@@ -247,83 +271,112 @@ vk_map_buffer_internal :: proc(
 	buffer_handle_gfx: gfx_interface.Gfx_Buffer,
 	offset_bytes: int, 
 	size_bytes: int,   
-) -> rawptr {
+) -> (rawptr, common.Engine_Error) {
+	if buffer_handle_gfx.variant == nil {
+		log.error("vk_map_buffer_internal: Gfx_Buffer variant is nil.")
+		return nil, common.Engine_Error.Invalid_Handle
+	}
+
     // Handle Vk_Buffer_Internal (typically for VBO/IBO, temporary mapping)
 	if vk_buffer_ptr, ok_buf := buffer_handle_gfx.variant.(^vk_types.Vk_Buffer_Internal); ok_buf && vk_buffer_ptr != nil {
-        if vk_buffer_ptr.device_ref == nil { log.error("vk_map_buffer: nil device_ref in Vk_Buffer_Internal"); return nil }
+        if vk_buffer_ptr.device_ref == nil { 
+			log.errorf("vk_map_buffer_internal (Vk_Buffer_Internal %p): device_ref is nil.", vk_buffer_ptr.buffer)
+			return nil, common.Engine_Error.Invalid_Handle
+		}
         logical_device := vk_buffer_ptr.device_ref.logical_device
+		if logical_device == vk.NULL_HANDLE {
+			log.errorf("vk_map_buffer_internal (Vk_Buffer_Internal %p): logical_device is nil.", vk_buffer_ptr.buffer)
+			return nil, common.Engine_Error.Invalid_Handle
+		}
 
-        if vk_buffer_ptr.mapped_ptr != nil { // Should not happen for non-persistent
-            log.warnf("Vk_Buffer_Internal %p already has a mapped_ptr. This indicates an issue or previous unmap was missed.", vk_buffer_ptr.buffer)
-            // return (^u8)(vk_buffer_ptr.mapped_ptr) + offset_bytes; // Risky, might be stale
+        if vk_buffer_ptr.mapped_ptr != nil { 
+            log.warnf("vk_map_buffer_internal (Vk_Buffer_Internal %p): buffer already has a mapped_ptr. This may indicate a missed unmap.", vk_buffer_ptr.buffer)
+            // Proceeding to map again might be problematic, but vk.MapMemory itself might handle this or error.
+            // For now, we'll let it try, but this is a sign of potential misuse.
         }
         
         actual_offset := vk.DeviceSize(offset_bytes)
         actual_size   := vk.DeviceSize(size_bytes)
         if size_bytes == -1 { actual_size = vk_buffer_ptr.size - actual_offset }
-        // Basic validation
-        if actual_offset >= vk_buffer_ptr.size || actual_offset + actual_size > vk_buffer_ptr.size {
-            log.errorf("vk_map_buffer: Invalid map range for Vk_Buffer_Internal. Offset: %v, Size: %v, Buffer Size: %v", actual_offset, actual_size, vk_buffer_ptr.size)
-            return nil
+        
+        if actual_offset >= vk_buffer_ptr.size || (actual_offset + actual_size) > vk_buffer_ptr.size {
+            log.errorf("vk_map_buffer_internal (Vk_Buffer_Internal %p): Invalid map range. Offset: %v, Size: %v, Buffer Size: %v", 
+                vk_buffer_ptr.buffer, actual_offset, actual_size, vk_buffer_ptr.size)
+            return nil, common.Engine_Error.Invalid_Parameter
         }
 
         mapped_data: rawptr
         result := vk.MapMemory(logical_device, vk_buffer_ptr.memory, actual_offset, actual_size, 0, &mapped_data)
         if result == .SUCCESS && mapped_data != nil {
-            vk_buffer_ptr.mapped_ptr = mapped_data // Store for unmap
-            return mapped_data
+            vk_buffer_ptr.mapped_ptr = mapped_data // Store for unmap by vk_unmap_buffer_internal
+            log.debugf("vk_map_buffer_internal: Successfully mapped Vk_Buffer_Internal %p to %p (offset: %v, size: %v)", vk_buffer_ptr.buffer, mapped_data, actual_offset, actual_size)
+            return mapped_data, .None
         }
-        log.errorf("vkMapMemory failed for Vk_Buffer_Internal %p: %v", vk_buffer_ptr.buffer, result)
-        return nil
+        log.errorf("vkMapMemory failed for Vk_Buffer_Internal %p (offset: %v, size: %v): %v", 
+            vk_buffer_ptr.buffer, actual_offset, actual_size, result)
+        return nil, common.Engine_Error.Vulkan_Error
 	}
 
     // Handle Vk_Uniform_Buffer_Info (already persistently mapped)
     if ubo_info_ptr, ok_ubo := buffer_handle_gfx.variant.(^vk_types.Vk_Uniform_Buffer_Info); ok_ubo && ubo_info_ptr != nil {
         if ubo_info_ptr.mapped_ptr == nil {
-            log.errorf("Vk_Uniform_Buffer_Info %p is not mapped, but should be persistently mapped.", ubo_info_ptr.buffer)
-            return nil
+            log.errorf("vk_map_buffer_internal (Vk_Uniform_Buffer_Info %p): is not mapped, but should be persistently mapped.", ubo_info_ptr.buffer)
+            return nil, common.Engine_Error.Invalid_Operation 
         }
-        // For persistently mapped UBOs, just return the mapped pointer + offset.
-        // Ensure requested range is valid.
+        
         actual_offset := vk.DeviceSize(offset_bytes)
         actual_size   := vk.DeviceSize(size_bytes)
         if size_bytes == -1 { actual_size = ubo_info_ptr.size - actual_offset }
 
-        if actual_offset >= ubo_info_ptr.size || actual_offset + actual_size > ubo_info_ptr.size {
-             log.errorf("vk_map_buffer: Invalid map range for Vk_Uniform_Buffer_Info. Offset: %v, Size: %v, Buffer Size: %v", actual_offset, actual_size, ubo_info_ptr.size)
-            return nil
+        if actual_offset >= ubo_info_ptr.size || (actual_offset + actual_size) > ubo_info_ptr.size {
+             log.errorf("vk_map_buffer_internal (Vk_Uniform_Buffer_Info %p): Invalid map range. Offset: %v, Size: %v, Buffer Size: %v", 
+                ubo_info_ptr.buffer, actual_offset, actual_size, ubo_info_ptr.size)
+            return nil, common.Engine_Error.Invalid_Parameter
         }
-        return (^u8)(ubo_info_ptr.mapped_ptr) + int(actual_offset) // Pointer arithmetic
+        log.debugf("vk_map_buffer_internal: Returning offset pointer for persistently mapped Vk_Uniform_Buffer_Info %p. Base: %p, Offset: %v", ubo_info_ptr.buffer, ubo_info_ptr.mapped_ptr, actual_offset)
+        return (^u8)(ubo_info_ptr.mapped_ptr) + int(actual_offset), .None
     }
 
-	log.errorf("vk_map_buffer: Invalid Gfx_Buffer variant type (%T) or nil pointer.", buffer_handle_gfx.variant)
-	return nil
+	log.errorf("vk_map_buffer_internal: Invalid Gfx_Buffer variant type (%T) or nil pointer.", buffer_handle_gfx.variant)
+	return nil, common.Engine_Error.Invalid_Handle
 }
 
-vk_unmap_buffer_internal :: proc(buffer_handle_gfx: gfx_interface.Gfx_Buffer) {
-    // Handle Vk_Buffer_Internal (temporary mapping)
-	if vk_buffer_ptr, ok_buf := buffer_handle_gfx.variant.(^vk_types.Vk_Buffer_Internal); ok_buf && vk_buffer_ptr != nil {
-        if vk_buffer_ptr.device_ref == nil { log.error("vk_unmap_buffer: nil device_ref in Vk_Buffer_Internal"); return }
-        logical_device := vk_buffer_ptr.device_ref.logical_device
-
-        if vk_buffer_ptr.mapped_ptr == nil {
-            log.warnf("vk_unmap_buffer called on Vk_Buffer_Internal %p that was not mapped or already unmapped.", vk_buffer_ptr.buffer)
-            return
-        }
-        vk.UnmapMemory(logical_device, vk_buffer_ptr.memory)
-        vk_buffer_ptr.mapped_ptr = nil 
-        return
+vk_unmap_buffer_internal :: proc(buffer_handle_gfx: gfx_interface.Gfx_Buffer) -> common.Engine_Error {
+	if buffer_handle_gfx.variant == nil {
+		log.error("vk_unmap_buffer_internal: Gfx_Buffer variant is nil.")
+		return common.Engine_Error.Invalid_Handle
 	}
 
-    // Handle Vk_Uniform_Buffer_Info (persistently mapped, unmap is a no-op from user perspective)
+    // Handle Vk_Buffer_Internal (temporary mapping)
+	if vk_buffer_ptr, ok_buf := buffer_handle_gfx.variant.(^vk_types.Vk_Buffer_Internal); ok_buf && vk_buffer_ptr != nil {
+        if vk_buffer_ptr.device_ref == nil { 
+			log.errorf("vk_unmap_buffer_internal (Vk_Buffer_Internal %p): device_ref is nil.", vk_buffer_ptr.buffer)
+			return common.Engine_Error.Invalid_Handle
+		}
+        logical_device := vk_buffer_ptr.device_ref.logical_device
+		if logical_device == vk.NULL_HANDLE {
+			log.errorf("vk_unmap_buffer_internal (Vk_Buffer_Internal %p): logical_device is nil.", vk_buffer_ptr.buffer)
+			return common.Engine_Error.Invalid_Handle
+		}
+
+        if vk_buffer_ptr.mapped_ptr == nil {
+            log.warnf("vk_unmap_buffer_internal called on Vk_Buffer_Internal %p that was not mapped or already unmapped.", vk_buffer_ptr.buffer)
+            return .None // Not an error, just a no-op or a sign of incorrect usage elsewhere.
+        }
+        log.debugf("vk_unmap_buffer_internal: Unmapping Vk_Buffer_Internal %p (memory %p, mapped_ptr %p)", vk_buffer_ptr.buffer, vk_buffer_ptr.memory, vk_buffer_ptr.mapped_ptr)
+        vk.UnmapMemory(logical_device, vk_buffer_ptr.memory)
+        vk_buffer_ptr.mapped_ptr = nil 
+        return .None
+	}
+
+    // Handle Vk_Uniform_Buffer_Info (persistently mapped, unmap is a no-op from user perspective for this call)
     if ubo_info_ptr, ok_ubo := buffer_handle_gfx.variant.(^vk_types.Vk_Uniform_Buffer_Info); ok_ubo && ubo_info_ptr != nil {
-        // Persistently mapped buffers are typically unmapped only on destruction.
-        // This call can be a no-op or log a warning if called explicitly by user on a UBO.
-        log.debugf("vk_unmap_buffer called on persistently mapped Vk_Uniform_Buffer_Info %p. No explicit unmap action taken here.", ubo_info_ptr.buffer)
-        return
+        log.debugf("vk_unmap_buffer_internal called on persistently mapped Vk_Uniform_Buffer_Info %p. No explicit unmap action taken here as it's unmapped on destruction.", ubo_info_ptr.buffer)
+        return .None
     }
 
-	log.errorf("vk_unmap_buffer: Invalid Gfx_Buffer variant type (%T) or nil pointer.", buffer_handle_gfx.variant)
+	log.errorf("vk_unmap_buffer_internal: Invalid Gfx_Buffer variant type (%T) or nil pointer.", buffer_handle_gfx.variant)
+	return common.Engine_Error.Invalid_Handle
 }
 
 

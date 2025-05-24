@@ -13,43 +13,50 @@ import "../../common" // For common.Engine_Error
 
 // vk_choose_swapchain_surface_format_internal selects a suitable surface format.
 // Prefers B8G8R8A8_SRGB with SRGB_NONLINEAR color space if available.
-vk_choose_swapchain_surface_format_internal :: proc(available_formats: []vk.SurfaceFormatKHR) -> vk.SurfaceFormatKHR {
+vk_choose_swapchain_surface_format_internal :: proc(available_formats: []vk.SurfaceFormatKHR) -> (vk.SurfaceFormatKHR, common.Engine_Error) {
 	if len(available_formats) == 0 {
-		log.error("No surface formats available for swapchain.")
-		// This should not happen if physical device selection was correct.
-		// Return a default, though it's unlikely to work.
-		return vk.SurfaceFormatKHR{format = .B8G8R8A8_SRGB, colorSpace = .SRGB_NONLINEAR_KHR}
+		log.error("vk_choose_swapchain_surface_format_internal: No surface formats available for swapchain.")
+		return vk.SurfaceFormatKHR{}, common.Engine_Error.No_Suitable_Format_Found
 	}
 
 	for _, format in available_formats {
 		if format.format == .B8G8R8A8_SRGB && format.colorSpace == .SRGB_NONLINEAR_KHR {
 			log.info("Chose preferred swapchain surface format: B8G8R8A8_SRGB, SRGB_NONLINEAR_KHR")
-			return format
+			return format, .None
 		}
 	}
 	// Fallback to the first available format if preferred is not found.
 	log.warnf("Preferred swapchain format not found. Using first available: Format %v, ColorSpace %v",
 		available_formats[0].format, available_formats[0].colorSpace)
-	return available_formats[0]
+	return available_formats[0], .None
 }
 
 // vk_choose_swapchain_present_mode_internal selects a suitable presentation mode.
 // Prefers MAILBOX if available, falls back to FIFO.
-vk_choose_swapchain_present_mode_internal :: proc(available_present_modes: []vk.PresentModeKHR) -> vk.PresentModeKHR {
+vk_choose_swapchain_present_mode_internal :: proc(available_present_modes: []vk.PresentModeKHR) -> (vk.PresentModeKHR, common.Engine_Error) {
 	if len(available_present_modes) == 0 {
-		log.error("No present modes available for swapchain.")
-		return .FIFO_KHR // Should always be available as per spec
+		log.error("vk_choose_swapchain_present_mode_internal: No present modes available for swapchain.")
+		// FIFO_KHR is guaranteed by spec, but an empty list means query failed or physical device is unusable.
+		return vk.PresentModeKHR.FIFO_KHR, common.Engine_Error.No_Suitable_Present_Mode_Found 
 	}
 
 	for _, mode in available_present_modes {
 		if mode == .MAILBOX_KHR {
 			log.info("Chose preferred swapchain present mode: MAILBOX_KHR")
-			return mode
+			return mode, .None
 		}
 	}
 	// FIFO is guaranteed to be available by the Vulkan spec.
 	log.info("MAILBOX_KHR present mode not available. Using FIFO_KHR.")
-	return .FIFO_KHR
+	// Check if FIFO_KHR is actually in the list if being strict, though it should be.
+	for _, mode in available_present_modes {
+		if mode == .FIFO_KHR {
+			return .FIFO_KHR, .None
+		}
+	}
+    // This case should ideally not be reached if FIFO_KHR is guaranteed.
+    log.error("vk_choose_swapchain_present_mode_internal: FIFO_KHR not found in available modes, though guaranteed by spec. Using first available.")
+    return available_present_modes[0], .None // Fallback to first, though implies an issue.
 }
 
 // vk_choose_swapchain_extent_internal determines the resolution of swap chain images.
@@ -95,22 +102,24 @@ vk_create_swapchain_internal_logic :: proc(
 	// These slices will be owned by `swap_support` and freed at the end of this function.
 	swap_support, ok_ss := query_swapchain_support(physical_device, surface, allocator)
 	if !ok_ss {
-		log.error("Failed to query swapchain support details during swapchain (re)creation.")
+		log.error("vk_create_swapchain_internal_logic: Failed to query swapchain support details.")
 		return common.Engine_Error.Device_Creation_Failed // Or a more specific swapchain error
 	}
 	// Ensure these slices are freed as they are allocated by query_swapchain_support with `allocator`.
 	defer delete(swap_support.formats)
 	defer delete(swap_support.present_modes)
 
-
-	if len(swap_support.formats) == 0 || len(swap_support.present_modes) == 0 {
-		log.error("No formats or present modes available for swapchain creation.")
-		return common.Engine_Error.Device_Creation_Failed
+	surface_format, err_sf := vk_choose_swapchain_surface_format_internal(swap_support.formats)
+	if err_sf != .None {
+		log.errorf("vk_create_swapchain_internal_logic: Could not choose surface format: %v", err_sf)
+		return err_sf
 	}
-
-	surface_format := vk_choose_swapchain_surface_format_internal(swap_support.formats)
-	present_mode   := vk_choose_swapchain_present_mode_internal(swap_support.present_modes)
-	extent         := vk_choose_swapchain_extent_internal(swap_support.capabilities, sdl_window_handle)
+	present_mode, err_pm := vk_choose_swapchain_present_mode_internal(swap_support.present_modes)
+	if err_pm != .None {
+		log.errorf("vk_create_swapchain_internal_logic: Could not choose present mode: %v", err_pm)
+		return err_pm
+	}
+	extent := vk_choose_swapchain_extent_internal(swap_support.capabilities, sdl_window_handle)
 
 	if extent.width == 0 || extent.height == 0 {
 		log.warn("Swapchain extent is zero (e.g. window minimized). Cannot create/recreate swapchain yet.")
@@ -311,18 +320,36 @@ vk_create_swapchain_internal_logic :: proc(
 
 
 // vk_destroy_framebuffers_internal cleans up framebuffers.
-vk_destroy_framebuffers_internal :: proc(logical_device: vk.Device, vk_win_internal: ^Vk_Window_Internal, p_vk_allocator: ^vk.AllocationCallbacks) {
-	if vk_win_internal == nil || vk_win_internal.framebuffers == nil {
-		return
+vk_destroy_framebuffers_internal :: proc(logical_device: vk.Device, vk_win_internal: ^Vk_Window_Internal, p_vk_allocator: ^vk.AllocationCallbacks) -> common.Engine_Error {
+	if vk_win_internal == nil {
+		log.warn("vk_destroy_framebuffers_internal: vk_win_internal is nil. Nothing to destroy.")
+		return .None // Or .Invalid_Handle if vk_win_internal must always be valid
 	}
-	log.debugf("Destroying %d framebuffers for swapchain %p", len(vk_win_internal.framebuffers), vk_win_internal.swapchain)
-	for _, fb in vk_win_internal.framebuffers {
+	if logical_device == vk.NULL_HANDLE {
+		log.error("vk_destroy_framebuffers_internal: logical_device is nil. Cannot destroy framebuffers.")
+		// If framebuffers exist, this is a problem as they can't be destroyed.
+		if vk_win_internal.framebuffers != nil && len(vk_win_internal.framebuffers) > 0 {
+			return common.Engine_Error.Invalid_Handle 
+		}
+		return .None // No logical device and no framebuffers to destroy.
+	}
+	if vk_win_internal.framebuffers == nil {
+		log.debug("vk_destroy_framebuffers_internal: No framebuffers slice to destroy.")
+		return .None
+	}
+
+	log.infof("Destroying %d framebuffers for swapchain %p on device %p", 
+		len(vk_win_internal.framebuffers), vk_win_internal.swapchain, logical_device)
+	for i, fb in vk_win_internal.framebuffers {
 		if fb != vk.NULL_HANDLE {
 			vk.DestroyFramebuffer(logical_device, fb, p_vk_allocator)
+			log.debugf("  Framebuffer [%d] %p destroyed.", i, fb)
 		}
 	}
 	delete(vk_win_internal.framebuffers)
 	vk_win_internal.framebuffers = nil
+	log.info("All framebuffers destroyed and slice deleted.")
+	return .None
 }
 
 // vk_create_framebuffers_internal creates framebuffers for the swapchain image views.
@@ -368,45 +395,83 @@ vk_create_framebuffers_internal :: proc(logical_device: vk.Device, vk_win_intern
 
 
 // vk_destroy_swapchain_image_views cleans up image views.
-vk_destroy_swapchain_image_views :: proc(logical_device: vk.Device, vk_win_internal: ^Vk_Window_Internal, p_vk_allocator: ^vk.AllocationCallbacks) {
-	if vk_win_internal == nil || vk_win_internal.swapchain_image_views == nil {
-		return
+vk_destroy_swapchain_image_views :: proc(logical_device: vk.Device, vk_win_internal: ^Vk_Window_Internal, p_vk_allocator: ^vk.AllocationCallbacks) -> common.Engine_Error {
+	if vk_win_internal == nil {
+		log.warn("vk_destroy_swapchain_image_views: vk_win_internal is nil. Nothing to destroy.")
+		return .None // Or .Invalid_Handle
 	}
-	log.debugf("Destroying %d image views for swapchain %p", len(vk_win_internal.swapchain_image_views), vk_win_internal.swapchain)
-	for _, image_view in vk_win_internal.swapchain_image_views {
+    if logical_device == vk.NULL_HANDLE {
+        log.error("vk_destroy_swapchain_image_views: logical_device is nil. Cannot destroy image views.")
+        if vk_win_internal.swapchain_image_views != nil && len(vk_win_internal.swapchain_image_views) > 0 {
+            return common.Engine_Error.Invalid_Handle
+        }
+        return .None
+    }
+	if vk_win_internal.swapchain_image_views == nil {
+        log.debug("vk_destroy_swapchain_image_views: No image view slice to destroy.")
+		return .None
+	}
+
+	log.infof("Destroying %d image views for swapchain %p on device %p", 
+		len(vk_win_internal.swapchain_image_views), vk_win_internal.swapchain, logical_device)
+	for i, image_view in vk_win_internal.swapchain_image_views {
 		if image_view != vk.NULL_HANDLE {
 			vk.DestroyImageView(logical_device, image_view, p_vk_allocator)
+			log.debugf("  ImageView [%d] %p destroyed.", i, image_view)
 		}
 	}
 	delete(vk_win_internal.swapchain_image_views) // Free the slice itself
 	vk_win_internal.swapchain_image_views = nil
+	log.info("All image views destroyed and slice deleted.")
+	return .None
 }
 
 // vk_destroy_swapchain_internal cleans up all swapchain related resources.
-vk_destroy_swapchain_internal :: proc(logical_device: vk.Device, vk_win_internal: ^Vk_Window_Internal, p_vk_allocator: ^vk.AllocationCallbacks) {
+vk_destroy_swapchain_internal :: proc(logical_device: vk.Device, vk_win_internal: ^Vk_Window_Internal, p_vk_allocator: ^vk.AllocationCallbacks) -> common.Engine_Error {
 	if vk_win_internal == nil {
-		return
+		log.warn("vk_destroy_swapchain_internal: vk_win_internal is nil. Nothing to destroy.")
+		return .None
 	}
-	// Wait for device to be idle before destroying swapchain resources,
-	// especially if this is called outside of full device destruction.
-	// vk.DeviceWaitIdle(logical_device) // Consider if this is needed here or at a higher level
+    if logical_device == vk.NULL_HANDLE {
+        log.error("vk_destroy_swapchain_internal: logical_device is nil. Cannot destroy swapchain resources.")
+        // If resources exist, this is an issue.
+        if vk_win_internal.swapchain != vk.NULL_HANDLE || vk_win_internal.framebuffers != nil || vk_win_internal.swapchain_image_views != nil {
+            return common.Engine_Error.Invalid_Handle
+        }
+        return .None
+    }
 
-	// Destroy Framebuffers first, as they depend on image views and render pass
-	vk_destroy_framebuffers_internal(logical_device, vk_win_internal, p_vk_allocator)
+	overall_error: common.Engine_Error = .None
+	
+	// Destroy Framebuffers first
+	err_fb := vk_destroy_framebuffers_internal(logical_device, vk_win_internal, p_vk_allocator)
+	if err_fb != .None {
+		log.errorf("vk_destroy_swapchain_internal: Error destroying framebuffers: %v", err_fb)
+		if overall_error == .None { overall_error = err_fb }
+	}
 
 	// Then destroy Image Views
-	vk_destroy_swapchain_image_views(logical_device, vk_win_internal, p_vk_allocator)
+	err_iv := vk_destroy_swapchain_image_views(logical_device, vk_win_internal, p_vk_allocator)
+	if err_iv != .None {
+		log.errorf("vk_destroy_swapchain_internal: Error destroying image views: %v", err_iv)
+		if overall_error == .None { overall_error = err_iv }
+	}
 	
 	// Swapchain images are owned by the swapchain and destroyed with it, so no explicit vkDestroyImage.
 	// Just clear the slice.
-	delete(vk_win_internal.swapchain_images)
-	vk_win_internal.swapchain_images = nil
+	if vk_win_internal.swapchain_images != nil {
+		log.debugf("Deleting swapchain_images slice for swapchain %p (images owned by swapchain).", vk_win_internal.swapchain)
+		delete(vk_win_internal.swapchain_images)
+		vk_win_internal.swapchain_images = nil
+	}
 
 	if vk_win_internal.swapchain != vk.NULL_HANDLE {
-		log.debugf("Destroying Vulkan Swapchain %p", vk_win_internal.swapchain)
+		log.infof("Destroying Vulkan Swapchain %p on device %p", vk_win_internal.swapchain, logical_device)
 		vk.DestroySwapchainKHR(logical_device, vk_win_internal.swapchain, p_vk_allocator)
 		vk_win_internal.swapchain = vk.NULL_HANDLE
+		log.info("Vulkan Swapchain destroyed.")
 	}
+	return overall_error
 }
 
 
@@ -523,94 +588,164 @@ vk_create_window_wrapper :: proc(
 
 // vk_destroy_window_internal_resources is a helper to clean up all resources within Vk_Window_Internal
 // This is called on failure during creation or during full destruction.
-vk_destroy_window_internal_resources :: proc(vk_win: ^Vk_Window_Internal) {
-	if vk_win == nil { return }
+vk_destroy_window_internal_resources :: proc(vk_win: ^Vk_Window_Internal) -> common.Engine_Error {
+	if vk_win == nil { 
+		log.warn("vk_destroy_window_internal_resources: vk_win is nil. Nothing to destroy.")
+		return .None 
+	}
 	
-	logical_device := vk_win.device_ref.logical_device // Assume device_ref is valid if vk_win is
-	instance       := vk_win.vk_instance.instance   // Assume vk_instance is valid
+	// Ensure device_ref and vk_instance are valid before trying to use them for destruction
+	if vk_win.device_ref == nil {
+		log.error("vk_destroy_window_internal_resources: vk_win.device_ref is nil. Cannot reliably destroy Vulkan resources.")
+		// SDL window can still be destroyed if present
+		if vk_win.sdl_window != nil {
+			sdl.DestroyWindow(vk_win.sdl_window)
+			log.warn("SDL Window destroyed, but Vulkan resources may remain due to nil device_ref.")
+			vk_win.sdl_window = nil
+		}
+		return common.Engine_Error.Invalid_Handle // Critical reference missing
+	}
+	logical_device := vk_win.device_ref.logical_device
+	
+	if vk_win.vk_instance == nil {
+		log.error("vk_destroy_window_internal_resources: vk_win.vk_instance is nil. Cannot reliably destroy surface.")
+		// Other resources tied to logical_device can still be cleaned up.
+	}
+	instance := vk_win.vk_instance.instance if vk_win.vk_instance != nil else vk.NULL_HANDLE
+	
 	p_vk_allocator: ^vk.AllocationCallbacks = nil
+	overall_error: common.Engine_Error = .None
 
-	// Wait for device idle before destroying window resources, especially if called outside full device destruction.
-	// This ensures command buffers, etc., are no longer in use.
 	if logical_device != vk.NULL_HANDLE {
-		vk.DeviceWaitIdle(logical_device)
+		log.debugf("Waiting for device %p to be idle before destroying window resources for SDL window '%s'...",
+			logical_device, sdl.GetWindowTitle(vk_win.sdl_window) if vk_win.sdl_window != nil else "N/A")
+		wait_res := vk.DeviceWaitIdle(logical_device)
+		if wait_res != .SUCCESS {
+			log.errorf("vk.DeviceWaitIdle failed: %v. Window resource cleanup might be incomplete or unsafe.", wait_res)
+			if overall_error == .None { overall_error = common.Engine_Error.Vulkan_Error }
+		}
+	} else {
+        log.warn("vk_destroy_window_internal_resources: logical_device is NULL. Skipping Vulkan resource cleanup that depends on it.")
+        // If logical_device is NULL, many Vulkan cleanup calls below are skipped.
+        // Surface and SDL window can still be cleaned.
+    }
+
+	// Destroy swapchain and its dependent resources (framebuffers, image views)
+	// vk_destroy_swapchain_internal now returns an error.
+	if logical_device != vk.NULL_HANDLE { // Swapchain resources depend on logical_device
+		err_sc := vk_destroy_swapchain_internal(logical_device, vk_win, p_vk_allocator)
+		if err_sc != .None {
+			log.errorf("Error during swapchain destruction for window '%s': %v", sdl.GetWindowTitle(vk_win.sdl_window), err_sc)
+			if overall_error == .None { overall_error = err_sc }
+		}
 	}
 
-	// Destroy swapchain and its dependent resources (framebuffers, image views, images are handled by it)
-	vk_destroy_swapchain_internal(logical_device, vk_win, p_vk_allocator)
-
 	// Destroy render pass owned by the window
-	if vk_win.render_pass != vk.NULL_HANDLE {
-		log.debugf("Destroying window RenderPass: %p", vk_win.render_pass)
+	if vk_win.render_pass != vk.NULL_HANDLE && logical_device != vk.NULL_HANDLE {
+		log.infof("Destroying window RenderPass: %p for window '%s'", vk_win.render_pass, sdl.GetWindowTitle(vk_win.sdl_window))
 		vk.DestroyRenderPass(logical_device, vk_win.render_pass, p_vk_allocator)
 		vk_win.render_pass = vk.NULL_HANDLE
 	}
 	
 	// Destroy synchronization primitives
-	for i := 0; i < MAX_FRAMES_IN_FLIGHT; i = i + 1 {
-		if vk_win.image_available_semaphores[i] != vk.NULL_HANDLE {
-			vk.DestroySemaphore(logical_device, vk_win.image_available_semaphores[i], p_vk_allocator)
-		}
-		if vk_win.render_finished_semaphores[i] != vk.NULL_HANDLE {
-			vk.DestroySemaphore(logical_device, vk_win.render_finished_semaphores[i], p_vk_allocator)
-		}
-		if vk_win.in_flight_fences[i] != vk.NULL_HANDLE {
-			vk.DestroyFence(logical_device, vk_win.in_flight_fences[i], p_vk_allocator)
+	if logical_device != vk.NULL_HANDLE {
+		log.info("Destroying frame synchronization primitives...")
+		for i := 0; i < MAX_FRAMES_IN_FLIGHT; i = i + 1 {
+			if vk_win.image_available_semaphores[i] != vk.NULL_HANDLE {
+				vk.DestroySemaphore(logical_device, vk_win.image_available_semaphores[i], p_vk_allocator)
+			}
+			if vk_win.render_finished_semaphores[i] != vk.NULL_HANDLE {
+				vk.DestroySemaphore(logical_device, vk_win.render_finished_semaphores[i], p_vk_allocator)
+			}
+			if vk_win.in_flight_fences[i] != vk.NULL_HANDLE {
+				vk.DestroyFence(logical_device, vk_win.in_flight_fences[i], p_vk_allocator)
+			}
 		}
 	}
-	log.debug("Destroyed frame synchronization primitives.")
 
-	// Command buffers are allocated from device's pool; freed when pool is destroyed or explicitly.
-	// If pool is device-global, explicit free here might be good if window is destroyed before device.
-	// For now, assume they are cleaned up with the command pool owned by Vk_Device_Internal.
-	// Or, if allocated specifically for this window and needs specific cleanup:
-	// if vk_win.device_ref != nil && vk_win.device_ref.command_pool != vk.NULL_HANDLE && vk_win.command_buffers[0] != vk.NULL_HANDLE {
-	// 	log.debugf("Freeing %d command buffers.", MAX_FRAMES_IN_FLIGHT)
-	// 	vk.FreeCommandBuffers(logical_device, vk_win.device_ref.command_pool, MAX_FRAMES_IN_FLIGHT, &vk_win.command_buffers[0])
-	// 	// Clear handles, though struct is about to be freed
-	// 	for i := 0; i < MAX_FRAMES_IN_FLIGHT; i=i+1 { vk_win.command_buffers[i] = vk.NULL_HANDLE }
-	// }
+	// Command buffers are allocated from device's pool.
+	// If this window exclusively owned them (e.g. from a window-specific pool), they'd be freed here.
+	// Current setup: command_buffers are per-window, but allocated from device's global command_pool.
+	// They should be freed if the command_pool they came from is still valid.
+	if vk_win.command_buffers[0] != vk.NULL_HANDLE && vk_win.device_ref != nil && 
+	   vk_win.device_ref.command_pool != vk.NULL_HANDLE && logical_device != vk.NULL_HANDLE {
+		log.infof("Freeing %d command buffers for window '%s' from pool %p.", 
+			MAX_FRAMES_IN_FLIGHT, sdl.GetWindowTitle(vk_win.sdl_window), vk_win.device_ref.command_pool)
+		vk.FreeCommandBuffers(logical_device, vk_win.device_ref.command_pool, MAX_FRAMES_IN_FLIGHT, &vk_win.command_buffers[0])
+		for i := 0; i < MAX_FRAMES_IN_FLIGHT; i=i+1 { vk_win.command_buffers[i] = vk.NULL_HANDLE }
+	}
 
 
 	// Destroy surface
-	if vk_win.surface != vk.NULL_HANDLE {
+	if vk_win.surface != vk.NULL_HANDLE && instance != vk.NULL_HANDLE {
+		log.infof("Destroying Vulkan SurfaceKHR %p for window '%s'", vk_win.surface, sdl.GetWindowTitle(vk_win.sdl_window))
 		vk.DestroySurfaceKHR(instance, vk_win.surface, p_vk_allocator)
-		log.info("Vulkan SurfaceKHR destroyed.")
 		vk_win.surface = vk.NULL_HANDLE
 	}
 	
 	// Destroy SDL window
 	if vk_win.sdl_window != nil {
+		window_title_cstr := sdl.GetWindowTitle(vk_win.sdl_window) // Get before destroy
+        window_title_str := string(window_title_cstr) if window_title_cstr != nil else "N/A"
+		log.infof("Destroying SDL Window: %s", window_title_str)
 		sdl.DestroyWindow(vk_win.sdl_window)
-		log.info("SDL Window destroyed.")
 		vk_win.sdl_window = nil
 	}
 	
 	// Free slices owned by Vk_Window_Internal not covered by other destroys
-	delete(vk_win.images_in_flight) // Slice of fences, fences themselves destroyed above or managed by Vulkan
-
-	// Free the Vk_Window_Internal struct itself
-	// This should be done by the caller of this helper, vk_destroy_window_wrapper
-	// free(vk_win, vk_win.allocator) 
-	// log.info("Vk_Window_Internal struct freed.")
+	if vk_win.images_in_flight != nil {
+		log.debug("Deleting images_in_flight slice.")
+		delete(vk_win.images_in_flight) 
+		vk_win.images_in_flight = nil
+	}
+    log.info("Finished destroying internal resources for Vk_Window_Internal.")
+	return overall_error
 }
 
 
-vk_destroy_window_wrapper :: proc(window: gfx_interface.Gfx_Window) {
-	if vk_win, ok := window.variant.(Vk_Window_Variant); ok && vk_win != nil {
-		log.infof("Destroying Vulkan Gfx_Window (SDL Window Title: %s, Surface: %p)", 
-			sdl.GetWindowTitle(vk_win.sdl_window) if vk_win.sdl_window != nil else "N/A", 
-			vk_win.surface)
-		
-		vk_destroy_window_internal_resources(vk_win) // Call the helper
-		
-		// Free the Vk_Window_Internal struct itself
-		free(vk_win, vk_win.allocator)
-		log.info("Vk_Window_Internal struct freed.")
-
-	} else {
-		log.errorf("vk_destroy_window_wrapper: Invalid Gfx_Window type or nil variant (%v).", window.variant)
+vk_destroy_window_wrapper :: proc(window: gfx_interface.Gfx_Window) -> common.Engine_Error {
+	if window.variant == nil {
+		log.error("vk_destroy_window_wrapper: Gfx_Window variant is nil.")
+		return common.Engine_Error.Invalid_Handle
 	}
+	vk_win, ok_win := window.variant.(Vk_Window_Variant)
+	if !ok_win || vk_win == nil {
+		log.errorf("vk_destroy_window_wrapper: Invalid Gfx_Window variant type (%T) or nil pointer.", window.variant)
+		return common.Engine_Error.Invalid_Handle
+	}
+	
+	window_title_str := "N/A"
+	if vk_win.sdl_window != nil {
+		// Capture title before SDL window is potentially destroyed by internal resources helper
+		title_cstr := sdl.GetWindowTitle(vk_win.sdl_window)
+		if title_cstr != nil { window_title_str = string(title_cstr) }
+	}
+	log.infof("Destroying Vulkan Gfx_Window (SDL Window Title: %s, Surface: %p)", window_title_str, vk_win.surface)
+		
+	err := vk_destroy_window_internal_resources(vk_win) // Call the helper
+	if err != .None {
+		log.errorf("Error destroying internal window resources for '%s': %v. Struct will still be freed.", window_title_str, err)
+		// Continue to free the struct memory even if resource cleanup had issues.
+	}
+		
+	// Free the Vk_Window_Internal struct itself
+	// Ensure allocator is valid before freeing
+	struct_allocator := vk_win.allocator
+	if struct_allocator == nil && vk_win.device_ref != nil { // Fallback if window allocator wasn't set directly
+        struct_allocator = vk_win.device_ref.allocator
+    }
+    if struct_allocator == nil && vk_win.vk_instance != nil { // Further fallback
+         struct_allocator = vk_win.vk_instance.allocator
+    }
+    if struct_allocator != nil {
+	    log.infof("Freeing Vk_Window_Internal struct %p for window '%s' (allocator %p).", vk_win, window_title_str, struct_allocator)
+	    free(vk_win, struct_allocator)
+    } else {
+        log.errorf("vk_destroy_window_wrapper: Cannot free Vk_Window_Internal struct for window '%s', no valid allocator found!", window_title_str)
+        if err == .None { err = common.Engine_Error.Memory_Error } // Indicate a problem if not already an error
+    }
+	log.infof("Vulkan Gfx_Window '%s' wrapper finished destruction.", window_title_str)
+	return err
 }
 
 

@@ -167,22 +167,38 @@ vk_create_vertex_array_internal :: proc(
 }
 
 // vk_destroy_vertex_array_internal frees memory associated with Vk_Vertex_Array_Internal.
-vk_destroy_vertex_array_internal :: proc(vao_handle: gfx_interface.Gfx_Vertex_Array) {
+vk_destroy_vertex_array_internal :: proc(vao_handle: gfx_interface.Gfx_Vertex_Array) -> common.Engine_Error {
+	if vao_handle.variant == nil {
+		log.error("vk_destroy_vertex_array_internal: Gfx_Vertex_Array variant is nil.")
+		return common.Engine_Error.Invalid_Handle
+	}
 	vk_vao_ptr, ok_vao := vao_handle.variant.(^Vk_Vertex_Array_Internal)
 	if !ok_vao || vk_vao_ptr == nil {
-		log.errorf("vk_destroy_vertex_array: Invalid Gfx_Vertex_Array type or nil variant (%v).", vao_handle.variant)
-		return
+		log.errorf("vk_destroy_vertex_array_internal: Invalid Gfx_Vertex_Array variant type (%T) or nil pointer.", vao_handle.variant)
+		return common.Engine_Error.Invalid_Handle
 	}
 
-	log.infof("Destroying Vk_Vertex_Array_Internal %p.", vk_vao_ptr)
+	log.infof("Destroying Vk_Vertex_Array_Internal %p (allocator: %p).", vk_vao_ptr, vk_vao_ptr.allocator_ref)
 	
-	// Free the slices within the struct
-	delete(vk_vao_ptr.binding_descriptions)
-	delete(vk_vao_ptr.attribute_descriptions)
-	delete(vk_vao_ptr.vertex_buffers_gfx) // This deletes the slice of Gfx_Buffer handles, not the buffers themselves
-	delete(vk_vao_ptr.vertex_buffer_offsets)
-	// index_buffer_gfx is not a slice
+	// Free the slices within the struct if they were allocated
+	if vk_vao_ptr.binding_descriptions != nil {
+		delete(vk_vao_ptr.binding_descriptions)
+	}
+	if vk_vao_ptr.attribute_descriptions != nil {
+		delete(vk_vao_ptr.attribute_descriptions)
+	}
+	if vk_vao_ptr.vertex_buffers_gfx != nil {
+		// This deletes the slice header and potentially its backing array if owned by this slice,
+		// but not the Gfx_Buffer objects themselves.
+		delete(vk_vao_ptr.vertex_buffers_gfx) 
+	}
+	if vk_vao_ptr.vertex_buffer_offsets != nil {
+		delete(vk_vao_ptr.vertex_buffer_offsets)
+	}
+	// index_buffer_gfx is not a slice and doesn't own memory directly here.
 
 	// Free the struct itself
 	free(vk_vao_ptr, vk_vao_ptr.allocator_ref)
+	log.info("Vk_Vertex_Array_Internal struct freed.")
+	return .None
 }

@@ -148,3 +148,4 @@ ShutdownSDL :: proc() {
 	SDL_Quit()
 	core.LogInfo("[SDL] SDL Shutdown complete.")
 }
+

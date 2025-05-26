@@ -2,11 +2,13 @@ package main
 
 import "src:core"
 import "src:sdl"
+
 import "src:ecs"    // Import the ECS package
 import "src:game"   // Import the game-specific components and systems
 
 // For delta_time (if not already imported)
 import "core:time" 
+
 
 main :: proc() {
 	core.LogInfo("MyOdinGameFramework starting...")
@@ -17,7 +19,9 @@ main :: proc() {
 	defer sdl.ShutdownSDL()
 	core.LogInfo("[Main] SDL Initialized.")
 	
+
 	sdl.InitInputState() 
+
 
 	window_obj, ok := sdl.CreateWindow("My Odin Game Framework", 800, 600)
 	if !ok {
@@ -32,6 +36,7 @@ main :: proc() {
 	}
 	defer sdl.DestroyRenderer(renderer_obj)
 	core.LogInfo("[Main] Renderer created.")
+
 
 	// --- ECS Initialization ---
 	core.LogInfo("[Main] Initializing ECS World...")
@@ -97,11 +102,13 @@ main :: proc() {
 			is_running = false
 		}
 
+
 		if sdl.IsKeyPressed(sdl.SDL_SCANCODE_ESCAPE) {
 			core.LogInfo("[Main] ESC key pressed. Shutting down.")
 			is_running = false
-		}
+
         if sdl.IsMouseButtonPressed(0) { 
+
             mx, my := sdl.GetMousePosition()
 			core.LogInfoFmt("[Main] Left mouse button pressed at: %d, %d", mx, my)
         }
@@ -129,9 +136,11 @@ main :: proc() {
 		}
 
 
+
 		// --- Rendering ---
 		bg_color := sdl.COLOR_BLUE
 		if sdl.IsKeyDown(sdl.SDL_SCANCODE_SPACE) {
+
 			bg_color = sdl.COLOR_GREEN 
 		}
 		sdl.Clear(renderer_obj, bg_color) 
@@ -139,6 +148,7 @@ main :: proc() {
 		sdl.Present(renderer_obj)
 
 		// sdl.SDL_Delay(1) // Yield, PresentVSync should handle pacing if enabled
+
 	}
 
 	core.LogInfo("[Main] Game loop finished. Application closing.")

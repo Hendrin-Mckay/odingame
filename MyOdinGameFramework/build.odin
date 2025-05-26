@@ -2,6 +2,7 @@ package main
 
 import "core:os"
 import "core:fmt"
+
 import "core:strings" // For joining paths if needed
 
 // Configuration for SDL3 - users might need to set these via env variables
@@ -95,5 +96,6 @@ main :: proc() {
         if len(res) > 0 {
 		    fmt.printf("Compiler/Linker Output:\n%s\n", string(res))
         }
+
 	}
 }
